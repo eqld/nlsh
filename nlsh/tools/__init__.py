@@ -9,12 +9,18 @@ from nlsh.tools.base import BaseTool
 from nlsh.tools.directory import DirLister
 from nlsh.tools.environment import EnvInspector
 from nlsh.tools.system import SystemInfo
+from nlsh.tools.shell import ShellHistoryInspector
+from nlsh.tools.process import ProcessSniffer
+from nlsh.tools.network import NetworkInfo
 
 # Register all available tools
 AVAILABLE_TOOLS = {
     "DirLister": DirLister,
     "EnvInspector": EnvInspector,
     "SystemInfo": SystemInfo,
+    "ShellHistoryInspector": ShellHistoryInspector,
+    "ProcessSniffer": ProcessSniffer,
+    "NetworkInfo": NetworkInfo,
 }
 
 def get_tool_class(tool_name):
