@@ -1,0 +1,41 @@
+# Neural Shell (nlsh) Configuration
+
+# Shell to use for command generation
+# Override with environment variable: NLSH_SHELL
+shell: "bash"  # Options: bash, zsh, fish, powershell
+
+# LLM Backends
+backends:
+  # OpenAI API
+  - name: "openai"
+    url: "https://api.openai.com/v1"
+    api_key: $OPENAI_API_KEY  # Will be replaced with environment variable
+    model: "gpt-3.5-turbo"    # Or gpt-4, etc.
+
+  # Local Ollama
+  - name: "local-ollama"
+    url: "http://localhost:11434/v1"
+    api_key: "ollama"         # Ollama doesn't require an API key
+    model: "llama3"           # Or any other model you have in Ollama
+
+  # Groq Cloud
+  - name: "groq-cloud"
+    url: "https://api.groq.com/v1"
+    api_key: $GROQ_KEY        # Will be replaced with environment variable
+    model: "llama3-70b-8192"  # Or mixtral-8x7b-32768, etc.
+
+# Default backend to use (index in the backends list, starting from 0)
+# Override with environment variable: NLSH_DEFAULT_BACKEND
+default_backend: 0
+
+# System tools configuration
+tools:
+  # List of enabled tools
+  enabled:
+    - DirLister       # Lists files in current directory
+    - EnvInspector    # Reports environment variables
+    - SystemInfo      # Provides OS and architecture information
+    # Uncomment to enable additional tools once implemented
+    # - ShellHistoryInspector
+    # - ProcessSniffer
+    # - NetworkInfo

@@ -20,7 +20,29 @@ YAML configuration for backends, default tools, and shell preferences.
 ## Installation
 
 1. Clone the repository
-2. TODO
+   ```bash
+   git clone https://github.com/eqld/nlsh.git
+   cd nlsh
+   ```
+
+2. Install the package
+   ```bash
+   pip install -e .
+   ```
+
+3. Create a configuration file (optional)
+   ```bash
+   mkdir -p ~/.nlsh
+   cp examples/config.yml ~/.nlsh/config.yml  # Edit this file with your API keys
+   ```
+
+4. Set up your API keys
+   ```bash
+   # For OpenAI
+   export OPENAI_API_KEY=your_api_key_here
+   
+   # For other backends, see the Configuration section
+   ```
 
 In the future it will be available in `pip`:
 
@@ -116,4 +138,4 @@ PRs welcome!
 
 ## License
 
-MIT © 2025
+MIT © 2025 eqld
