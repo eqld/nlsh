@@ -6,7 +6,6 @@ import json
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage, Choice
 
 from nlsh.config import Config
 from nlsh.backends import LLMBackend, BackendManager
@@ -46,27 +45,15 @@ class TestLLMBackend:
             "model": "test-model"
         }
         
-        # Create a mock response
-        mock_message = ChatCompletionMessage(
-            content="ls -la",
-            role="assistant",
-            function_call=None,
-            tool_calls=None
-        )
-        mock_choice = Choice(
-            finish_reason="stop",
-            index=0,
-            message=mock_message,
-            logprobs=None
-        )
-        mock_response = ChatCompletion(
-            id="test-id",
-            choices=[mock_choice],
-            created=1600000000,
-            model="test-model",
-            object="chat.completion",
-            usage=None
-        )
+        # Create a mock response using MagicMock
+        mock_message = MagicMock()
+        mock_message.content = "ls -la"
+        
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
         
         # Create a mock OpenAI client
         mock_client = MagicMock()
