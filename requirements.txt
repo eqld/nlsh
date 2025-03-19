@@ -1,0 +1,10 @@
+# Runtime dependencies
+openai>=1.0.0
+pyyaml>=5.1
+
+# Development dependencies
+pytest>=7.0.0
+black>=23.0.0
+isort>=5.10.0
+mypy>=1.0.0
+flake8>=6.0.0

@@ -27,7 +27,12 @@ YAML configuration for backends, default tools, and shell preferences.
 
 2. Install the package
    ```bash
+   # Option 1: Install in development mode with all dependencies
+   pip install -r requirements.txt
    pip install -e .
+   
+   # Option 2: Simple installation
+   pip install .
    ```
 
 3. Create a configuration file (optional)
