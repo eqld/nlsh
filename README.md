@@ -110,8 +110,12 @@ Append `-i` to confirm before executing the suggested command:
 ```bash
 nlsh -i "Delete old log files"
 # Suggested: find /var/log -name "*.log" -mtime +30 -delete
-# [Confirm] Run this command? (y/N)
+# [Confirm] Run this command? (y/N) y
+# Executing: find /var/log -name "*.log" -mtime +30 -delete
+# (command output appears here)
 ```
+
+If you confirm with 'y' or 'yes', the command will be executed directly. If you decline, the command will not be run.
 
 ### Custom Prompts
 
@@ -125,8 +129,10 @@ nlsh --prompt-file migration_task.txt
 
 ## Security
 
-* Tools only perform read-only operations.
-* Command execution never happens without explicit user confirmation.
+* Tools only perform read-only operations to gather system context.
+* Command execution only happens in interactive mode (`-i` flag) and requires explicit user confirmation.
+* In non-interactive mode (default), commands are only displayed and never executed automatically.
+* All generated commands are shown to the user before any execution.
 
 --------
 
