@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug nlsh",
+      "type": "python",
+      "request": "launch",
+      "module": "nlsh.main",
+      "args": ["Find all text files in the current directory"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Debug nlsh (interactive)",
+      "type": "python",
+      "request": "launch",
+      "module": "nlsh.main",
+      "args": ["-i", "List running processes"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    }
+  ]
+}

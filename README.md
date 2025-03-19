@@ -141,9 +141,83 @@ nlsh --prompt-file migration_task.txt
 
 --------
 
+## Development
+
+If you want to develop or debug `nlsh` locally without installing it system-wide, follow these steps to set up a virtual environment:
+
+### Setting Up a Virtual Environment
+
+```bash
+# Clone the repository if you haven't already
+git clone https://github.com/eqld/nlsh.git
+cd nlsh
+
+# Create a virtual environment
+python -m venv .venv
+
+# Activate the virtual environment
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows:
+# .venv\Scripts\activate
+
+# Install development dependencies
+pip install -r requirements.txt
+
+# Install the package in development mode
+pip install -e .
+```
+
+### Running the Development Version
+
+Once you have set up your virtual environment and installed the package in development mode, you can run the development version of `nlsh`:
+
+```bash
+# Make sure your virtual environment is activated
+python -m nlsh.main "Your prompt here"
+
+# Or use the entry point directly
+nlsh "Your prompt here"
+```
+
+### Debugging
+
+For debugging, you can use your preferred IDE's debugging tools. For example, with VS Code:
+
+1. Set breakpoints in the code
+2. Create a launch configuration in `.vscode/launch.json`:
+   ```json
+   {
+     "version": "0.2.0",
+     "configurations": [
+       {
+         "name": "Debug nlsh",
+         "type": "python",
+         "request": "launch",
+         "module": "nlsh.main",
+         "args": ["Your test prompt"],
+         "console": "integratedTerminal"
+       }
+     ]
+   }
+   ```
+3. Start debugging from the VS Code debug panel
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run tests with coverage report
+pytest --cov=nlsh
+```
+
+--------
+
 ## Contributing
 
-PRs welcome!
+PRs welcome! Please make sure to set up a development environment as described above, and ensure all tests pass before submitting a pull request.
 
 --------
 
