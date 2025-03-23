@@ -9,12 +9,57 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
+import threading
 from typing import List, Optional
 
 from nlsh.config import Config
 from nlsh.backends import BackendManager
 from nlsh.tools import get_enabled_tools
 from nlsh.prompt import PromptBuilder
+
+
+class Spinner:
+    """Simple spinner to show progress."""
+    
+    def __init__(self, message="Thinking", stream=sys.stderr):
+        """Initialize the spinner.
+        
+        Args:
+            message: Message to display before the spinner.
+            stream: Stream to write to (default: stderr).
+        """
+        self.message = message
+        self.stream = stream
+        self.running = False
+        self.spinner_thread = None
+        self.spinner_chars = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+        self.current = 0
+    
+    def spin(self):
+        """Spin the spinner."""
+        while self.running:
+            self.stream.write(f"\r{self.message}... {self.spinner_chars[self.current]} ")
+            self.stream.flush()
+            self.current = (self.current + 1) % len(self.spinner_chars)
+            time.sleep(0.1)
+        # Clear the spinner line
+        self.stream.write("\r" + " " * (len(self.message) + 15) + "\r")
+        self.stream.flush()
+    
+    def start(self):
+        """Start the spinner."""
+        if not self.running:
+            self.running = True
+            self.spinner_thread = threading.Thread(target=self.spin)
+            self.spinner_thread.daemon = True
+            self.spinner_thread.start()
+    
+    def stop(self):
+        """Stop the spinner."""
+        self.running = False
+        if self.spinner_thread:
+            self.spinner_thread.join()
 
 
 def parse_args(args: List[str]) -> argparse.Namespace:
@@ -47,6 +92,13 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         help="Interactive mode (confirm before executing)"
     )
     
+    # Verbose mode
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Verbose mode (print reasoning tokens to stderr)"
+    )
+    
     # Configuration file
     parser.add_argument(
         "--config",
@@ -69,23 +121,24 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     # Prompt (positional argument)
     parser.add_argument(
         "prompt",
-        nargs="?",
+        nargs="*",
         help="Prompt for command generation"
     )
     
     return parser.parse_args(args)
 
 
-async def generate_command(config: Config, backend_index: Optional[int], prompt: str) -> str:
+async def generate_command(config: Config, backend_index: Optional[int], prompt: str, verbose: bool = False) -> str:
     """Generate a command using the specified backend.
     
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
         prompt: User prompt.
+        verbose: Whether to print reasoning tokens to stderr.
         
     Returns:
-        str: Generated command.
+        str: Generated shell command.
     """
     # Get enabled tools
     tools = get_enabled_tools(config)
@@ -99,8 +152,19 @@ async def generate_command(config: Config, backend_index: Optional[int], prompt:
     backend_manager = BackendManager(config)
     backend = backend_manager.get_backend(backend_index)
     
-    # Generate command
-    return await backend.generate_command(user_prompt, system_prompt)
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner("Thinking")
+        spinner.start()
+    
+    try:
+        # Generate command
+        return await backend.generate_command(user_prompt, system_prompt, verbose=verbose)
+    finally:
+        # Stop spinner
+        if spinner:
+            spinner.stop()
 
 
 def confirm_execution(command: str) -> bool:
@@ -197,11 +261,12 @@ def main() -> int:
         prompt_builder = PromptBuilder(config)
         prompt = prompt_builder.load_prompt_from_file(args.prompt_file)
     else:
-        prompt = args.prompt
+        # Join all prompt arguments into a single string
+        prompt = " ".join(args.prompt) if args.prompt else ""
     
     # Generate command
     try:
-        command = asyncio.run(generate_command(config, args.backend, prompt))
+        command = asyncio.run(generate_command(config, args.backend, prompt, verbose=args.verbose))
         
         # Display the command
         if args.interactive:

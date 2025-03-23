@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "Debug nlsh",
-      "type": "python",
+      "type": "debugpy",
       "request": "launch",
       "module": "nlsh.main",
       "args": ["Find all text files in the current directory"],
@@ -15,7 +15,7 @@
     },
     {
       "name": "Debug nlsh (interactive)",
-      "type": "python",
+      "type": "debugpy",
       "request": "launch",
       "module": "nlsh.main",
       "args": ["-i", "List running processes"],
