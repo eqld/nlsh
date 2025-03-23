@@ -72,23 +72,29 @@ class LLMBackend:
             timeout=120.0  # Increase timeout to 120 seconds for reasoning models
         )
     
-    async def generate_command(self, prompt: str, system_context: str, verbose: bool = False) -> str:
+    async def generate_command(self, prompt: str, system_context: str, verbose: bool = False, chat_history: List[Dict[str, str]] = None) -> str:
         """Generate a shell command based on the prompt and context.
         
         Args:
             prompt: User prompt.
             system_context: System context information.
             verbose: Whether to print reasoning tokens to stderr.
+            chat_history: Optional chat history for follow-up mode.
             
         Returns:
             str: Generated shell command.
         """
         try:
             # Create messages for the chat completion
-            messages = [
-                {"role": "system", "content": system_context},
-                {"role": "user", "content": prompt}
-            ]
+            if chat_history:
+                # Use existing chat history
+                messages = chat_history
+            else:
+                # Create new messages
+                messages = [
+                    {"role": "system", "content": system_context},
+                    {"role": "user", "content": prompt}
+                ]
             
             if verbose:
                 # Use streaming mode to show reasoning tokens

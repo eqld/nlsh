@@ -148,6 +148,63 @@ nlsh -i delete old log files
 
 If you confirm with 'y' or 'yes', the command will be executed directly. If you decline, the command will not be run.
 
+### Follow-up Mode
+
+Use `-f` in combination with `-i` to enable follow-up mode, which maintains context between commands:
+
+```bash
+nlsh -i -f setup a python virtual environment
+# Suggested: python -m venv myenv
+# [Confirm] Run this command? (y/N/r) y
+# Executing: python -m venv myenv
+# ...
+# Enter next prompt (Ctrl+C to exit): activate the virtual environment
+# Context window: [██████░░░░░░░░░░░░░░░░░░░░░░░░] 20.5%
+# Selected tools: EnvInspector, SystemInfo
+# Suggested: source myenv/bin/activate
+# [Confirm] Run this command? (y/N/r) y
+# ...
+```
+
+In follow-up mode:
+- The tool remembers previous prompts, commands, and their outputs
+- You can continue with related prompts without repeating context
+- Press Ctrl+C to exit the session
+- A context window usage bar shows how much of the available context is being used
+- If using a paid API, the cost per request and total session cost are displayed
+
+### Command Regeneration
+
+In follow-up mode, you can ask for a different command by responding with 'r':
+
+```bash
+nlsh -i -f find large files
+# Suggested: find . -type f -size +100M
+# [Confirm] Run this command? (y/N/r) r
+# Regenerating command...
+# Suggested: du -h -d 1 | sort -hr
+# [Confirm] Run this command? (y/N/r) y
+# ...
+```
+
+This tells the model not to suggest the same command again and to try a different approach.
+
+### Intelligent Tool Selection
+
+The tool automatically analyzes your prompt and selects only the tools that are relevant:
+
+```bash
+nlsh list files in the current directory
+# Selected tools: DirLister
+# find . -type f -maxdepth 1
+
+nlsh check if port 8080 is in use
+# Selected tools: ProcessSniffer, NetworkInfo
+# lsof -i :8080
+```
+
+This makes responses faster and more focused by only including relevant system context.
+
 ### Tool Management
 
 You can list all available tools and their status:
@@ -158,7 +215,7 @@ nlsh --list-tools
 # - DirLister: enabled
 # - EnvInspector: enabled
 # - SystemInfo: enabled
-# - ShellHistoryInspector: disabled
+# - ShellHistoryInspector: enabled
 # - ProcessSniffer: disabled
 # - NetworkInfo: disabled
 # - GitRepoInfo: disabled
@@ -188,17 +245,22 @@ The log file will contain JSON entries with timestamps, backend information, pro
 
 ### Verbose Mode
 
-Use `-v` or `--verbose` to display reasoning tokens when using reasoning models:
+Use `-v` or `--verbose` to display reasoning tokens and tool selection process:
 
 ```bash
 nlsh -v -2 find all python files modified in the last week
+# Preflight system prompt:
+# You are an AI assistant that helps select the most appropriate tools...
+# ...
+# Selected tools: DirLister, SystemInfo
+# 
 # Reasoning: I need to find Python files that were modified in the last 7 days.
 # The command to find files by extension is 'find' with the '-name' option.
 # To filter by modification time, I'll use '-mtime -7' which means "modified less than 7 days ago".
 # find . -name "*.py" -mtime -7
 ```
 
-This is particularly useful with reasoning models like DeepSeek Reasoner, which show their step-by-step thinking process. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer.
+This is particularly useful with reasoning models, which show their step-by-step thinking process. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer.
 
 ### Custom Prompts
 
