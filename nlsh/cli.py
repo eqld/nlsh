@@ -6,12 +6,14 @@ This module provides the command-line interface for the nlsh utility.
 
 import argparse
 import asyncio
+import datetime
+import json
 import os
 import subprocess
 import sys
 import time
 import threading
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from nlsh.config import Config
 from nlsh.backends import BackendManager
@@ -118,6 +120,31 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         help="Show version information"
     )
     
+    # Log file
+    parser.add_argument(
+        "--log-file",
+        help="Path to file for logging LLM requests and responses"
+    )
+    
+    # Tool management
+    parser.add_argument(
+        "--list-tools",
+        action="store_true",
+        help="List all available tools and their status (enabled/disabled)"
+    )
+    
+    parser.add_argument(
+        "--enable-tool",
+        action="append",
+        help="Enable a specific tool for the current request (can be used multiple times)"
+    )
+    
+    parser.add_argument(
+        "--disable-tool",
+        action="append",
+        help="Disable a specific tool for the current request (can be used multiple times)"
+    )
+    
     # Prompt (positional argument)
     parser.add_argument(
         "prompt",
@@ -128,7 +155,7 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
-async def generate_command(config: Config, backend_index: Optional[int], prompt: str, verbose: bool = False) -> str:
+async def generate_command(config: Config, backend_index: Optional[int], prompt: str, verbose: bool = False, log_file: Optional[str] = None, enable_tools: Optional[List[str]] = None, disable_tools: Optional[List[str]] = None) -> str:
     """Generate a command using the specified backend.
     
     Args:
@@ -140,8 +167,8 @@ async def generate_command(config: Config, backend_index: Optional[int], prompt:
     Returns:
         str: Generated shell command.
     """
-    # Get enabled tools
-    tools = get_enabled_tools(config)
+    # Get enabled tools with overrides
+    tools = get_enabled_tools(config, enable=enable_tools, disable=disable_tools)
     
     # Build prompt
     prompt_builder = PromptBuilder(config)
@@ -160,7 +187,35 @@ async def generate_command(config: Config, backend_index: Optional[int], prompt:
     
     try:
         # Generate command
-        return await backend.generate_command(user_prompt, system_prompt, verbose=verbose)
+        response = await backend.generate_command(user_prompt, system_prompt, verbose=verbose)
+        
+        # Log request and response if log file is specified
+        if log_file:
+            log_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "backend": {
+                    "name": backend.name,
+                    "model": backend.model,
+                    "url": backend.url
+                },
+                "prompt": prompt,
+                "system_context": system_prompt,
+                "response": response
+            }
+            
+            try:
+                # Create directory if it doesn't exist
+                log_dir = os.path.dirname(log_file)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir)
+                
+                # Append to log file
+                with open(log_file, 'a') as f:
+                    f.write(json.dumps(log_entry, indent=2) + "\n")
+            except Exception as e:
+                print(f"Error writing to log file: {str(e)}", file=sys.stderr)
+        
+        return response
     finally:
         # Stop spinner
         if spinner:
@@ -250,6 +305,15 @@ def main() -> int:
     # Load configuration
     config = Config(args.config)
     
+    # List tools if requested
+    if args.list_tools:
+        all_tools = config.get_all_tools()
+        print("Available tools:")
+        for name, enabled in all_tools.items():
+            status = "enabled" if enabled else "disabled"
+            print(f"- {name}: {status}")
+        return 0
+    
     # Check if we have a prompt
     if not args.prompt and not args.prompt_file:
         print("Error: No prompt provided")
@@ -266,7 +330,15 @@ def main() -> int:
     
     # Generate command
     try:
-        command = asyncio.run(generate_command(config, args.backend, prompt, verbose=args.verbose))
+        command = asyncio.run(generate_command(
+            config, 
+            args.backend, 
+            prompt, 
+            verbose=args.verbose,
+            log_file=args.log_file,
+            enable_tools=args.enable_tool,
+            disable_tools=args.disable_tool
+        ))
         
         # Display the command
         if args.interactive:

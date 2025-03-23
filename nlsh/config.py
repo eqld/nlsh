@@ -169,10 +169,42 @@ class Config:
             # Fall back to first backend if index is invalid
             return self.config["backends"][0] if self.config["backends"] else None
     
-    def get_enabled_tools(self):
-        """Get list of enabled tools.
+    def get_all_tools(self):
+        """Get list of all available tools.
         
+        Returns:
+            dict: Dictionary mapping tool names to their enabled status.
+        """
+        from nlsh.tools import AVAILABLE_TOOLS
+        
+        all_tools = {name: False for name in AVAILABLE_TOOLS.keys()}
+        for tool in self.get_enabled_tools():
+            if tool in all_tools:
+                all_tools[tool] = True
+                
+        return all_tools
+    
+    def get_enabled_tools(self, enable=None, disable=None):
+        """Get list of enabled tools, with optional overrides.
+        
+        Args:
+            enable: Optional list of tool names to enable for this request.
+            disable: Optional list of tool names to disable for this request.
+            
         Returns:
             list: List of enabled tool names.
         """
-        return self.config["tools"]["enabled"]
+        # Start with configured enabled tools
+        enabled = self.config["tools"]["enabled"].copy()
+        
+        # Apply enable overrides
+        if enable:
+            for tool in enable:
+                if tool not in enabled:
+                    enabled.append(tool)
+        
+        # Apply disable overrides
+        if disable:
+            enabled = [t for t in enabled if t not in disable]
+            
+        return enabled

@@ -128,6 +128,7 @@ Enhance LLM context with these read-only utilities (enable in config):
 | `EnvInspector` | Reports environment variables (PATH, SHELL, etc.) for compatibility checks. |
 | `SystemInfo` | Provides OS, kernel, and architecture context. |
 | `NetworkInfo` | Lists open ports and active connections relevant to network commands. |
+| `GitRepoInfo` | Supplements context with Git repository information (branch, commits, changes). |
 
 --------
 
@@ -146,6 +147,44 @@ nlsh -i "Delete old log files"
 ```
 
 If you confirm with 'y' or 'yes', the command will be executed directly. If you decline, the command will not be run.
+
+### Tool Management
+
+You can list all available tools and their status:
+
+```bash
+nlsh --list-tools
+# Available tools:
+# - DirLister: enabled
+# - EnvInspector: enabled
+# - SystemInfo: enabled
+# - ShellHistoryInspector: disabled
+# - ProcessSniffer: disabled
+# - NetworkInfo: disabled
+# - GitRepoInfo: disabled
+```
+
+You can enable or disable specific tools for a single request:
+
+```bash
+nlsh --enable-tool GitRepoInfo "Show me information about this git repository"
+```
+
+You can also enable or disable multiple tools:
+
+```bash
+nlsh --enable-tool GitRepoInfo --enable-tool ProcessSniffer --disable-tool DirLister "Show me information about this git repository"
+```
+
+### Request Logging
+
+You can log all requests to the LLM and its responses to a file:
+
+```bash
+nlsh --log-file ~/.nlsh/logs/requests.log "Find all Python files modified in the last week"
+```
+
+The log file will contain JSON entries with timestamps, backend information, prompts, system context, and responses.
 
 ### Verbose Mode
 
