@@ -57,10 +57,26 @@ pip install nlsh
 
 ## Usage
 
+Basic usage:
 ```bash
 nlsh -2 "Find all PDFs modified in the last 2 days and compress them"
 # Example output:
 # find . -name "*.pdf" -mtime -2 -exec tar czvf archive.tar.gz {} +
+```
+
+With interactive mode:
+```bash
+nlsh -i "List all processes using port 8080"
+# Suggested: lsof -i :8080
+# [Confirm] Run this command? (y/N) 
+```
+
+With verbose mode for reasoning models:
+```bash
+nlsh -v -2 "Count lines of code in all JavaScript files"
+# Reasoning: To count lines of code in JavaScript files, I can use the 'find' command to locate all .js files,
+# then pipe the results to 'xargs wc -l' to count the lines in each file.
+# find . -name "*.js" -type f | xargs wc -l
 ```
 
 --------
@@ -75,9 +91,16 @@ backends:
   - name: "local-ollama"
     url: "http://localhost:11434/v1"
     api_key: "ollama"
+    model: "llama3"
   - name: "groq-cloud"
     url: "https://api.groq.com/v1"
     api_key: $GROQ_KEY
+    model: "llama3-70b-8192"
+  - name: "deepseek-reasoner"
+    url: "https://api.deepseek.com/v1"
+    api_key: $DEEPSEEK_API_KEY
+    model: "deepseek-reasoner"
+    is_reasoning_model: true  # Mark as a reasoning model for verbose mode
 default_backend: 0
 tools:
   enabled:
@@ -88,6 +111,8 @@ tools:
     - SystemInfo
     - NetworkInfo
 ```
+
+The `is_reasoning_model` flag is used to identify models that provide reasoning tokens in their responses. When this flag is set to `true` and verbose mode is enabled, the tool will display the model's reasoning process in real-time. If not explicitly set, models with "reason" in their name are automatically detected as reasoning models.
 
 --------
 
@@ -121,6 +146,20 @@ nlsh -i "Delete old log files"
 ```
 
 If you confirm with 'y' or 'yes', the command will be executed directly. If you decline, the command will not be run.
+
+### Verbose Mode
+
+Use `-v` or `--verbose` to display reasoning tokens when using reasoning models:
+
+```bash
+nlsh -v -2 "Find all Python files modified in the last week"
+# Reasoning: I need to find Python files that were modified in the last 7 days.
+# The command to find files by extension is 'find' with the '-name' option.
+# To filter by modification time, I'll use '-mtime -7' which means "modified less than 7 days ago".
+# find . -name "*.py" -mtime -7
+```
+
+This is particularly useful with reasoning models like DeepSeek Reasoner, which show their step-by-step thinking process. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer.
 
 ### Custom Prompts
 

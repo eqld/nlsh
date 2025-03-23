@@ -9,20 +9,21 @@ backends:
   # OpenAI API
   - name: "openai"
     url: "https://api.openai.com/v1"
-    api_key: $OPENAI_API_KEY  # Will be replaced with environment variable
-    model: "gpt-3.5-turbo"    # Or gpt-4, etc.
+    api_key: $OPENAI_API_KEY   # Will be replaced with environment variable
+    model: "gpt-3.5-turbo"     # Or gpt-4, etc.
 
   # Local Ollama
   - name: "local-ollama"
     url: "http://localhost:11434/v1"
-    api_key: "ollama"         # Ollama doesn't require an API key
-    model: "llama3"           # Or any other model you have in Ollama
+    api_key: "ollama"          # Ollama doesn't require an API key
+    model: "llama3"            # Or any other model you have in Ollama
 
-  # Groq Cloud
-  - name: "groq-cloud"
-    url: "https://api.groq.com/v1"
-    api_key: $GROQ_KEY        # Will be replaced with environment variable
-    model: "llama3-70b-8192"  # Or mixtral-8x7b-32768, etc.
+  # DeepSeek reasoner (reasoning model)
+  - name: "deepseek-reasoner"
+    url: "https://api.deepseek.com/v1"
+    api_key: $DEEPSEEK_API_KEY # Will be replaced with environment variable
+    model: "deepseek-reasoner"
+    is_reasoning_model: true   # This flag is required to be able to display reasoning tokens in verbose mode
 
 # Default backend to use (index in the backends list, starting from 0)
 # Override with environment variable: NLSH_DEFAULT_BACKEND
