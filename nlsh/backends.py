@@ -54,6 +54,11 @@ class LLMBackend:
         self.url = config.get("url", "")
         self.api_key = config.get("api_key", "")
         self.model = config.get("model", "")
+        self.is_reasoning_model = config.get("is_reasoning_model", False)
+        
+        # Auto-detect reasoning models by name if not explicitly set
+        if not self.is_reasoning_model and "reason" in self.name.lower():
+            self.is_reasoning_model = True
         
         # For local models, use a dummy API key if none is provided
         api_key = self.api_key
@@ -64,7 +69,7 @@ class LLMBackend:
         self.client = openai.OpenAI(
             base_url=self.url,
             api_key=api_key,
-            timeout=60.0  # Increase timeout to 60 seconds
+            timeout=120.0  # Increase timeout to 120 seconds for reasoning models
         )
     
     async def generate_command(self, prompt: str, system_context: str, verbose: bool = False) -> str:
@@ -104,9 +109,19 @@ class LLMBackend:
                 for chunk in stream:
                     if chunk.choices and len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
-                        if hasattr(delta, 'content') and delta.content:
-                            sys.stderr.write(delta.content)
+                        
+                        # Check for reasoning content (for reasoning models)
+                        if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                            sys.stderr.write(delta.reasoning_content)
                             sys.stderr.flush()
+                            # Don't add reasoning content to the final response
+                        
+                        # Check for regular content
+                        if hasattr(delta, 'content') and delta.content:
+                            # For non-reasoning models or final output
+                            if not self.is_reasoning_model:
+                                sys.stderr.write(delta.content)
+                                sys.stderr.flush()
                             full_response += delta.content
                 
                 sys.stderr.write("\n")

@@ -21,7 +21,8 @@ class Config:
                 "name": "openai",
                 "url": "https://api.openai.com/v1",
                 "api_key": "",  # Will be populated from environment variable
-                "model": "gpt-3.5-turbo"
+                "model": "gpt-3.5-turbo",
+                "is_reasoning_model": False  # Flag to identify reasoning models
             }
         ],
         "default_backend": 0,
