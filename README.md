@@ -59,21 +59,21 @@ pip install nlsh
 
 Basic usage:
 ```bash
-nlsh -2 "Find all PDFs modified in the last 2 days and compress them"
+nlsh -2 find all pdfs modified in the last 2 days and compress them
 # Example output:
 # find . -name "*.pdf" -mtime -2 -exec tar czvf archive.tar.gz {} +
 ```
 
 With interactive mode:
 ```bash
-nlsh -i "List all processes using port 8080"
+nlsh -i list all processes using port 8080
 # Suggested: lsof -i :8080
 # [Confirm] Run this command? (y/N) 
 ```
 
 With verbose mode for reasoning models:
 ```bash
-nlsh -v -2 "Count lines of code in all JavaScript files"
+nlsh -v -2 count lines of code in all javascript files
 # Reasoning: To count lines of code in JavaScript files, I can use the 'find' command to locate all .js files,
 # then pipe the results to 'xargs wc -l' to count the lines in each file.
 # find . -name "*.js" -type f | xargs wc -l
@@ -139,7 +139,7 @@ Enhance LLM context with these read-only utilities (enable in config):
 Append `-i` to confirm before executing the suggested command:
 
 ```bash
-nlsh -i "Delete old log files"
+nlsh -i delete old log files
 # Suggested: find /var/log -name "*.log" -mtime +30 -delete
 # [Confirm] Run this command? (y/N) y
 # Executing: find /var/log -name "*.log" -mtime +30 -delete
@@ -167,13 +167,13 @@ nlsh --list-tools
 You can enable or disable specific tools for a single request:
 
 ```bash
-nlsh --enable-tool GitRepoInfo "Show me information about this git repository"
+nlsh --enable-tool GitRepoInfo show me information about this git repository
 ```
 
 You can also enable or disable multiple tools:
 
 ```bash
-nlsh --enable-tool GitRepoInfo --enable-tool ProcessSniffer --disable-tool DirLister "Show me information about this git repository"
+nlsh --enable-tool GitRepoInfo --enable-tool ProcessSniffer --disable-tool DirLister show me information about this git repository
 ```
 
 ### Request Logging
@@ -181,7 +181,7 @@ nlsh --enable-tool GitRepoInfo --enable-tool ProcessSniffer --disable-tool DirLi
 You can log all requests to the LLM and its responses to a file:
 
 ```bash
-nlsh --log-file ~/.nlsh/logs/requests.log "Find all Python files modified in the last week"
+nlsh --log-file ~/.nlsh/logs/requests.log find all python files modified in the last week
 ```
 
 The log file will contain JSON entries with timestamps, backend information, prompts, system context, and responses.
@@ -191,7 +191,7 @@ The log file will contain JSON entries with timestamps, backend information, pro
 Use `-v` or `--verbose` to display reasoning tokens when using reasoning models:
 
 ```bash
-nlsh -v -2 "Find all Python files modified in the last week"
+nlsh -v -2 find all python files modified in the last week
 # Reasoning: I need to find Python files that were modified in the last 7 days.
 # The command to find files by extension is 'find' with the '-name' option.
 # To filter by modification time, I'll use '-mtime -7' which means "modified less than 7 days ago".
@@ -252,10 +252,10 @@ Once you have set up your virtual environment and installed the package in devel
 
 ```bash
 # Make sure your virtual environment is activated
-python -m nlsh.main "Your prompt here"
+python -m nlsh.main your prompt here
 
 # Or use the entry point directly
-nlsh "Your prompt here"
+nlsh your prompt here
 ```
 
 ### Debugging
@@ -270,7 +270,7 @@ For debugging, you can use your preferred IDE's debugging tools. For example, wi
      "configurations": [
        {
          "name": "Debug nlsh",
-         "type": "python",
+         "type": "debugpy",
          "request": "launch",
          "module": "nlsh.main",
          "args": ["Your test prompt"],
