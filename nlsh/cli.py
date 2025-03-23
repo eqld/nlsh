@@ -245,11 +245,6 @@ async def generate_command(
             
             # Add assistant response to chat history
             chat_session.add_assistant_message(response)
-            
-            # Track cost (approximate)
-            input_tokens = sum(count_tokens(msg["content"]) for msg in chat_session.get_messages())
-            output_tokens = count_tokens(response)
-            chat_session.track_cost(backend.model, input_tokens, output_tokens)
         else:
             # Generate command without chat history
             response = await backend.generate_command(user_prompt, system_prompt, verbose=verbose)
@@ -402,6 +397,9 @@ async def run_follow_up_mode(
     # Get backend manager
     backend_manager = BackendManager(config)
     
+    # Get backend
+    backend = backend_manager.get_backend(backend_index)
+    
     # Select tools for initial prompt
     tool_selector = ToolSelector(config, backend_manager)
     selected_tool_names = await tool_selector.select_tools(
@@ -418,8 +416,12 @@ async def run_follow_up_mode(
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_system_prompt(tools)
     
-    # Create chat session
-    chat_session = ChatSession(system_prompt)
+    # Create chat session with model context window size
+    chat_session = ChatSession(
+        system_prompt,
+        client=backend.client,
+        model_name=backend.model
+    )
     
     # Process initial prompt
     prompt = initial_prompt
@@ -533,35 +535,48 @@ def main() -> int:
     
     # Generate command
     try:
-        command = asyncio.run(generate_command(
-            config, 
-            args.backend, 
-            prompt, 
-            verbose=args.verbose,
-            log_file=args.log_file,
-            enable_tools=args.enable_tool,
-            disable_tools=args.disable_tool
-        ))
-        
-        # Display the command
+        # Interactive mode with command regeneration
         if args.interactive:
-            # In interactive mode, ask for confirmation
-            confirmation = confirm_execution(command)
-            
-            if confirmation == "regenerate":
-                # Regenerate the command
-                print("Command regeneration is only available in follow-up mode (-f)")
-                return 1
-            elif confirmation:
-                print(f"Executing: {command}")
-                # Actually execute the command
-                exit_code, _ = execute_command(command)
-                return exit_code
-            else:
-                print("Command execution cancelled")
-                return 0
+            while True:
+                # Generate command
+                command = asyncio.run(generate_command(
+                    config, 
+                    args.backend, 
+                    prompt, 
+                    verbose=args.verbose,
+                    log_file=args.log_file,
+                    enable_tools=args.enable_tool,
+                    disable_tools=args.disable_tool
+                ))
+                
+                # Ask for confirmation
+                confirmation = confirm_execution(command)
+                
+                if confirmation == "regenerate":
+                    # Regenerate the command
+                    print("Regenerating command...")
+                    continue
+                elif confirmation:
+                    print(f"Executing: {command}")
+                    # Actually execute the command
+                    exit_code, _ = execute_command(command)
+                    return exit_code
+                else:
+                    print("Command execution cancelled")
+                    return 0
         else:
-            # In non-interactive mode, just print the command
+            # Non-interactive mode
+            command = asyncio.run(generate_command(
+                config, 
+                args.backend, 
+                prompt, 
+                verbose=args.verbose,
+                log_file=args.log_file,
+                enable_tools=args.enable_tool,
+                disable_tools=args.disable_tool
+            ))
+            
+            # Just print the command
             print(command)
             return 0
         

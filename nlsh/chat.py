@@ -5,9 +5,42 @@ This module provides functionality for managing chat sessions in follow-up mode.
 """
 
 import re
+import sys
 from typing import List, Dict, Any, Optional, Tuple
 
-# Approximate token count for context window management
+# Default context window size for modern models (16k tokens)
+DEFAULT_CONTEXT_SIZE = 16384
+
+def get_model_context_size(client, model_name: str) -> int:
+    """Get the context window size for a model.
+    
+    This function attempts to get the context window size from the API
+    if possible, otherwise falls back to a default size.
+    
+    Args:
+        client: OpenAI-compatible client.
+        model_name: Name of the model.
+        
+    Returns:
+        int: Context window size in tokens.
+    """
+    try:
+        # Extract the base model name (without any additional parameters)
+        base_model = model_name.split(':')[-1] if ':' in model_name else model_name
+        
+        # Try to get model information from the API
+        model_info = client.models.retrieve(base_model)
+        
+        # Extract context window size if available
+        if hasattr(model_info, 'context_window') and model_info.context_window:
+            return model_info.context_window
+    except Exception as e:
+        # If there's any error, fall back to default size
+        print(f"Could not retrieve context window size for model {model_name}: {str(e)}", file=sys.stderr)
+    
+    # Fall back to default size
+    return DEFAULT_CONTEXT_SIZE
+
 def count_tokens(text: str) -> int:
     """Count tokens in text (approximate).
     
@@ -27,7 +60,7 @@ def count_tokens(text: str) -> int:
 class ContextWindowManager:
     """Manages context window usage."""
     
-    def __init__(self, max_tokens: int = 4096):
+    def __init__(self, max_tokens: int = DEFAULT_CONTEXT_SIZE):
         """Initialize the context window manager.
         
         Args:
@@ -106,90 +139,29 @@ class ContextWindowManager:
         print(f"\rContext window: [{bar}] {percentage:.1f}%", end="")
 
 
-class CostTracker:
-    """Tracks API call costs."""
-    
-    # Cost per 1000 tokens for different models (input/output)
-    MODEL_COSTS = {
-        # OpenAI models
-        "gpt-3.5-turbo": {"input": 0.0015, "output": 0.002},
-        "gpt-4": {"input": 0.03, "output": 0.06},
-        "gpt-4-turbo": {"input": 0.01, "output": 0.03},
-        
-        # Anthropic models
-        "claude-instant-1": {"input": 0.0008, "output": 0.0024},
-        "claude-2": {"input": 0.008, "output": 0.024},
-        
-        # Default fallback for unknown models
-        "default": {"input": 0.001, "output": 0.002}
-    }
-    
-    def __init__(self):
-        """Initialize the cost tracker."""
-        self.total_cost = 0.0
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-    
-    def calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
-        """Calculate cost for an API call.
-        
-        Args:
-            model: Model name.
-            input_tokens: Number of input tokens.
-            output_tokens: Number of output tokens.
-            
-        Returns:
-            float: Cost in USD.
-        """
-        # Skip for local models
-        if "localhost" in model or "127.0.0.1" in model:
-            return 0.0
-        
-        # Get cost rates for the model
-        model_name = model.split(':')[-1] if ':' in model else model
-        cost_rates = self.MODEL_COSTS.get(model_name, self.MODEL_COSTS["default"])
-        
-        # Calculate cost
-        input_cost = (input_tokens / 1000) * cost_rates["input"]
-        output_cost = (output_tokens / 1000) * cost_rates["output"]
-        cost = input_cost + output_cost
-        
-        # Update totals
-        self.total_cost += cost
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
-        
-        return cost
-    
-    def display_cost(self, model: str, input_tokens: int, output_tokens: int):
-        """Display cost for an API call.
-        
-        Args:
-            model: Model name.
-            input_tokens: Number of input tokens.
-            output_tokens: Number of output tokens.
-        """
-        # Skip for local models
-        if "localhost" in model or "127.0.0.1" in model:
-            return
-        
-        cost = self.calculate_cost(model, input_tokens, output_tokens)
-        print(f"Cost: ${cost:.6f} (Total: ${self.total_cost:.6f})")
+# CostTracker class has been removed as the prompt cost calculation was not precise enough
 
 
 class ChatSession:
     """Manages chat history for follow-up mode."""
     
-    def __init__(self, system_prompt: str, max_tokens: int = 4096):
+    def __init__(self, system_prompt: str, max_tokens: int = DEFAULT_CONTEXT_SIZE, client=None, model_name: Optional[str] = None):
         """Initialize the chat session.
         
         Args:
             system_prompt: System prompt to use for the session.
             max_tokens: Maximum number of tokens in the context window.
+            client: OpenAI-compatible client for retrieving model information.
+            model_name: Optional model name to get context window size.
         """
         self.history = [{"role": "system", "content": system_prompt}]
-        self.context_manager = ContextWindowManager(max_tokens)
-        self.cost_tracker = CostTracker()
+        
+        # If client and model_name are provided, try to get context window size
+        context_size = max_tokens
+        if client and model_name:
+            context_size = get_model_context_size(client, model_name)
+        
+        self.context_manager = ContextWindowManager(context_size)
         
         # Add system message to token count
         self.context_manager.add_message(self.history[0])
@@ -261,16 +233,6 @@ class ChatSession:
             list: List of message dictionaries.
         """
         return self.history
-    
-    def track_cost(self, model: str, input_tokens: int, output_tokens: int) -> None:
-        """Track cost for an API call.
-        
-        Args:
-            model: Model name.
-            input_tokens: Number of input tokens.
-            output_tokens: Number of output tokens.
-        """
-        self.cost_tracker.display_cost(model, input_tokens, output_tokens)
     
     def display_context_usage(self) -> None:
         """Display context window usage."""

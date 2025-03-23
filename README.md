@@ -74,6 +74,10 @@ nlsh -i list all processes using port 8080
 With verbose mode for reasoning models:
 ```bash
 nlsh -v -2 count lines of code in all javascript files
+# Preflight reasoning:
+# (reasoning tokens for tool selection)
+# Selected tools: DirLister, SystemInfo
+# 
 # Reasoning: To count lines of code in JavaScript files, I can use the 'find' command to locate all .js files,
 # then pipe the results to 'xargs wc -l' to count the lines in each file.
 # find . -name "*.js" -type f | xargs wc -l
@@ -141,12 +145,28 @@ Append `-i` to confirm before executing the suggested command:
 ```bash
 nlsh -i delete old log files
 # Suggested: find /var/log -name "*.log" -mtime +30 -delete
-# [Confirm] Run this command? (y/N) y
+# [Confirm] Run this command? (y/N/r) y
 # Executing: find /var/log -name "*.log" -mtime +30 -delete
 # (command output appears here)
 ```
 
 If you confirm with 'y' or 'yes', the command will be executed directly. If you decline, the command will not be run.
+
+### Command Regeneration
+
+In both interactive mode and follow-up mode, you can ask for a different command by responding with 'r':
+
+```bash
+nlsh -i find large files
+# Suggested: find . -type f -size +100M
+# [Confirm] Run this command? (y/N/r) r
+# Regenerating command...
+# Suggested: du -h -d 1 | sort -hr
+# [Confirm] Run this command? (y/N/r) y
+# ...
+```
+
+This tells the model not to suggest the same command again and to try a different approach.
 
 ### Follow-up Mode
 
@@ -171,23 +191,7 @@ In follow-up mode:
 - You can continue with related prompts without repeating context
 - Press Ctrl+C to exit the session
 - A context window usage bar shows how much of the available context is being used
-- If using a paid API, the cost per request and total session cost are displayed
-
-### Command Regeneration
-
-In follow-up mode, you can ask for a different command by responding with 'r':
-
-```bash
-nlsh -i -f find large files
-# Suggested: find . -type f -size +100M
-# [Confirm] Run this command? (y/N/r) r
-# Regenerating command...
-# Suggested: du -h -d 1 | sort -hr
-# [Confirm] Run this command? (y/N/r) y
-# ...
-```
-
-This tells the model not to suggest the same command again and to try a different approach.
+- The context window size is automatically determined based on the model being used
 
 ### Intelligent Tool Selection
 
@@ -203,7 +207,7 @@ nlsh check if port 8080 is in use
 # lsof -i :8080
 ```
 
-This makes responses faster and more focused by only including relevant system context.
+This makes responses faster and more focused by only including relevant system context. The tool selection process is robust and falls back to default tools if needed.
 
 ### Tool Management
 
@@ -249,9 +253,8 @@ Use `-v` or `--verbose` to display reasoning tokens and tool selection process:
 
 ```bash
 nlsh -v -2 find all python files modified in the last week
-# Preflight system prompt:
-# You are an AI assistant that helps select the most appropriate tools...
-# ...
+# Preflight reasoning:
+# (reasoning tokens for tool selection)
 # Selected tools: DirLister, SystemInfo
 # 
 # Reasoning: I need to find Python files that were modified in the last 7 days.
@@ -260,7 +263,7 @@ nlsh -v -2 find all python files modified in the last week
 # find . -name "*.py" -mtime -7
 ```
 
-This is particularly useful with reasoning models, which show their step-by-step thinking process. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer.
+This is particularly useful with reasoning models, which show their step-by-step thinking process. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer. In verbose mode, both the preflight reasoning (for tool selection) and the command generation reasoning are streamed to STDERR.
 
 ### Custom Prompts
 

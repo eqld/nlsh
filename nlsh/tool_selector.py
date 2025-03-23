@@ -6,6 +6,8 @@ for a given prompt using a preflight system prompt.
 """
 
 import sys
+import re
+import json
 from typing import List, Dict, Any, Optional, Set
 
 from nlsh.config import Config
@@ -31,6 +33,9 @@ For example: {"DirLister": true, "EnvInspector": true, "SystemInfo": false, ...}
 
 Only select tools that are truly necessary for the specific prompt. Do not select tools that would not provide relevant information.
 """
+    
+    # Default tools to use if tool selection fails
+    DEFAULT_TOOLS = ["SystemInfo", "EnvInspector"]
     
     def __init__(self, config: Config, backend_manager: BackendManager):
         """Initialize the tool selector.
@@ -102,7 +107,12 @@ Only select tools that are truly necessary for the specific prompt. Do not selec
         preflight_prompt = self._build_preflight_prompt(available_tools)
         
         # Get backend
-        backend = self.backend_manager.get_backend(backend_index)
+        try:
+            backend = self.backend_manager.get_backend(backend_index)
+        except Exception as e:
+            # If we can't get the backend, use default tools
+            print(f"Error getting backend: {str(e)}", file=sys.stderr)
+            return self._get_default_tools(available_tools.keys())
         
         # Start spinner if not in verbose mode
         spinner = None
@@ -111,51 +121,27 @@ Only select tools that are truly necessary for the specific prompt. Do not selec
             spinner.start()
         
         try:
-            # Display preflight prompt if verbose
+            # In verbose mode, we don't print the preflight system prompt itself and user prompt,
+            # but we stream the reasoning tokens from the preflight response
             if verbose:
-                print("Preflight system prompt:", file=sys.stderr)
-                print(preflight_prompt, file=sys.stderr)
-                print("\nUser prompt:", file=sys.stderr)
-                print(prompt, file=sys.stderr)
-                print("\nSelecting tools...", file=sys.stderr)
+                print("\nPreflight reasoning:", file=sys.stderr)
             
             # Generate tool selection
-            response = await backend.generate_command(
-                prompt, 
-                preflight_prompt, 
-                verbose=verbose
-            )
+            try:
+                response = await backend.generate_command(
+                    prompt, 
+                    preflight_prompt, 
+                    verbose=verbose
+                )
+            except Exception as e:
+                # If tool selection fails, use default tools
+                print(f"Error selecting tools: {str(e)}", file=sys.stderr)
+                selected_tools = self._get_default_tools(available_tools.keys())
+                return selected_tools
             
             # Log preflight prompt and response if log file is specified
             if log_file:
-                import json
-                import datetime
-                
-                log_entry = {
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "type": "preflight",
-                    "backend": {
-                        "name": backend.name,
-                        "model": backend.model,
-                        "url": backend.url
-                    },
-                    "prompt": prompt,
-                    "system_context": preflight_prompt,
-                    "response": response
-                }
-                
-                try:
-                    import os
-                    # Create directory if it doesn't exist
-                    log_dir = os.path.dirname(log_file)
-                    if log_dir and not os.path.exists(log_dir):
-                        os.makedirs(log_dir)
-                    
-                    # Append to log file
-                    with open(log_file, 'a') as f:
-                        f.write(json.dumps(log_entry, indent=2) + "\n")
-                except Exception as e:
-                    print(f"Error writing to log file: {str(e)}", file=sys.stderr)
+                self._log_preflight(log_file, backend, prompt, preflight_prompt, response)
             
             # Parse the response to get selected tools
             selected_tools = self._parse_tool_selection(response, available_tools.keys())
@@ -164,7 +150,8 @@ Only select tools that are truly necessary for the specific prompt. Do not selec
             if selected_tools:
                 print(f"Selected tools: {', '.join(selected_tools)}", file=sys.stderr)
             else:
-                print("No tools selected", file=sys.stderr)
+                print("No tools selected, using defaults", file=sys.stderr)
+                selected_tools = self._get_default_tools(available_tools.keys())
             
             return selected_tools
             
@@ -172,6 +159,56 @@ Only select tools that are truly necessary for the specific prompt. Do not selec
             # Stop spinner
             if spinner:
                 spinner.stop()
+    
+    def _log_preflight(self, log_file: str, backend: Any, prompt: str, preflight_prompt: str, response: str) -> None:
+        """Log preflight prompt and response.
+        
+        Args:
+            log_file: Path to log file.
+            backend: Backend instance.
+            prompt: User prompt.
+            preflight_prompt: Preflight system prompt.
+            response: Response from the LLM.
+        """
+        try:
+            import os
+            import datetime
+            
+            log_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "type": "preflight",
+                "backend": {
+                    "name": backend.name,
+                    "model": backend.model,
+                    "url": backend.url
+                },
+                "prompt": prompt,
+                "system_context": preflight_prompt,
+                "response": response
+            }
+            
+            # Create directory if it doesn't exist
+            log_dir = os.path.dirname(log_file)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            
+            # Append to log file
+            with open(log_file, 'a') as f:
+                f.write(json.dumps(log_entry, indent=2) + "\n")
+        except Exception as e:
+            print(f"Error writing to log file: {str(e)}", file=sys.stderr)
+    
+    def _get_default_tools(self, available_tools: Set[str]) -> List[str]:
+        """Get default tools to use if tool selection fails.
+        
+        Args:
+            available_tools: Set of available tool names.
+            
+        Returns:
+            list: List of default tool names.
+        """
+        # Return intersection of default tools and available tools
+        return [tool for tool in self.DEFAULT_TOOLS if tool in available_tools]
     
     def _parse_tool_selection(self, response: str, available_tools: Set[str]) -> List[str]:
         """Parse the tool selection response.
@@ -183,14 +220,11 @@ Only select tools that are truly necessary for the specific prompt. Do not selec
         Returns:
             list: List of selected tool names.
         """
-        import json
-        import re
-        
         # Try to extract JSON from the response
         json_match = re.search(r'{.*}', response, re.DOTALL)
         if not json_match:
-            # No JSON found, return all available tools
-            return list(available_tools)
+            # No JSON found, use default tools
+            return self._get_default_tools(available_tools)
         
         try:
             # Parse the JSON
@@ -202,8 +236,12 @@ Only select tools that are truly necessary for the specific prompt. Do not selec
                 if selected and tool in available_tools:
                     selected_tools.append(tool)
             
+            # If no tools were selected, use default tools
+            if not selected_tools:
+                return self._get_default_tools(available_tools)
+            
             return selected_tools
             
         except json.JSONDecodeError:
-            # JSON parsing failed, return all available tools
-            return list(available_tools)
+            # JSON parsing failed, use default tools
+            return self._get_default_tools(available_tools)
