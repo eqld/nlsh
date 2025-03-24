@@ -343,29 +343,6 @@ For debugging, you can use your preferred IDE's debugging tools. For example, wi
    ```
 3. Start debugging from the VS Code debug panel
 
-### Running Tests
-
-First, make sure you have all the testing dependencies installed:
-
-```bash
-pip install -r requirements.txt
-```
-
-Then you can run the tests:
-
-```bash
-# Run all tests
-pytest
-
-# Run tests with coverage report
-pytest --cov=nlsh
-
-# Run a specific test file
-pytest tests/test_config.py
-```
-
---------
-
 ## Contributing
 
 PRs welcome! Please make sure to set up a development environment as described above, and ensure all tests pass before submitting a pull request.
