@@ -167,7 +167,7 @@ async def generate_command(
             )
             
             # Get selected tool instances
-            tools = get_enabled_tools(config, enable=selected_tool_names, disable=disable_tools)
+            tools = get_enabled_tools(config, selected=selected_tool_names, enable=enable_tools, disable=disable_tools)
         except Exception as e:
             print(f"Error in tool selection: {str(e)}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -514,7 +514,8 @@ def main() -> int:
                         verbose=args.verbose,
                         log_file=args.log_file,
                         enable_tools=args.enable_tool,
-                        disable_tools=args.disable_tool
+                        disable_tools=args.disable_tool,
+                        use_tool_selector=True
                     ))
                     
                     # Ask for confirmation
@@ -541,7 +542,8 @@ def main() -> int:
                     verbose=args.verbose,
                     log_file=args.log_file,
                     enable_tools=args.enable_tool,
-                    disable_tools=args.disable_tool
+                    disable_tools=args.disable_tool,
+                    use_tool_selector=True
                 ))
                 
                 # Just print the command

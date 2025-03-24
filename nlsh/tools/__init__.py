@@ -29,11 +29,12 @@ def get_tool_class(tool_name):
     """Get a tool class by name."""
     return AVAILABLE_TOOLS.get(tool_name)
 
-def get_enabled_tools(config, enable=None, disable=None):
+def get_enabled_tools(config, selected=None, enable=None, disable=None):
     """Get instances of all enabled tools based on configuration.
     
     Args:
         config: Configuration object.
+        selected: Optional list of selected tool names to enable for this request.
         enable: Optional list of tool names to enable for this request.
         disable: Optional list of tool names to disable for this request.
         
@@ -42,6 +43,8 @@ def get_enabled_tools(config, enable=None, disable=None):
     """
     enabled_tools = []
     for tool_name in config.get_enabled_tools(enable=enable, disable=disable):
+        if selected and tool_name not in selected:
+            continue
         tool_class = get_tool_class(tool_name)
         if tool_class:
             enabled_tools.append(tool_class(config))
