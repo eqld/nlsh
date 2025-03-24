@@ -14,6 +14,7 @@ import sys
 import time
 import threading
 import io
+import traceback
 from typing import List, Optional, Dict, Any, Tuple, Union
 
 from nlsh.config import Config
@@ -22,49 +23,7 @@ from nlsh.tools import get_enabled_tools
 from nlsh.prompt import PromptBuilder
 from nlsh.chat import ChatSession, count_tokens
 from nlsh.tool_selector import ToolSelector
-
-
-class Spinner:
-    """Simple spinner to show progress."""
-    
-    def __init__(self, message="Thinking", stream=sys.stderr):
-        """Initialize the spinner.
-        
-        Args:
-            message: Message to display before the spinner.
-            stream: Stream to write to (default: stderr).
-        """
-        self.message = message
-        self.stream = stream
-        self.running = False
-        self.spinner_thread = None
-        self.spinner_chars = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
-        self.current = 0
-    
-    def spin(self):
-        """Spin the spinner."""
-        while self.running:
-            self.stream.write(f"\r{self.message}... {self.spinner_chars[self.current]} ")
-            self.stream.flush()
-            self.current = (self.current + 1) % len(self.spinner_chars)
-            time.sleep(0.1)
-        # Clear the spinner line
-        self.stream.write("\r" + " " * (len(self.message) + 15) + "\r")
-        self.stream.flush()
-    
-    def start(self):
-        """Start the spinner."""
-        if not self.running:
-            self.running = True
-            self.spinner_thread = threading.Thread(target=self.spin)
-            self.spinner_thread.daemon = True
-            self.spinner_thread.start()
-    
-    def stop(self):
-        """Stop the spinner."""
-        self.running = False
-        if self.spinner_thread:
-            self.spinner_thread.join()
+from nlsh.spinner import Spinner
 
 
 def parse_args(args: List[str]) -> argparse.Namespace:
@@ -197,17 +156,23 @@ async def generate_command(
     
     # Select tools
     if use_tool_selector:
-        # Use tool selector to select appropriate tools
-        tool_selector = ToolSelector(config, backend_manager)
-        selected_tool_names = await tool_selector.select_tools(
-            prompt, 
-            backend_index=backend_index,
-            verbose=verbose,
-            log_file=log_file
-        )
-        
-        # Get selected tool instances
-        tools = get_enabled_tools(config, enable=selected_tool_names, disable=disable_tools)
+        try:
+            # Use tool selector to select appropriate tools
+            tool_selector = ToolSelector(config, backend_manager)
+            selected_tool_names = await tool_selector.select_tools(
+                prompt, 
+                backend_index=backend_index,
+                verbose=verbose,
+                log_file=log_file
+            )
+            
+            # Get selected tool instances
+            tools = get_enabled_tools(config, enable=selected_tool_names, disable=disable_tools)
+        except Exception as e:
+            print(f"Error in tool selection: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            # Fall back to all enabled tools
+            tools = get_enabled_tools(config, enable=enable_tools, disable=disable_tools)
     else:
         # Get all enabled tools with overrides
         tools = get_enabled_tools(config, enable=enable_tools, disable=disable_tools)
@@ -231,9 +196,6 @@ async def generate_command(
         if chat_session:
             # Add user prompt to chat history
             chat_session.add_user_message(user_prompt)
-            
-            # Display context window usage
-            chat_session.display_context_usage()
             
             # Generate command using chat history
             response = await backend.generate_command(
@@ -394,84 +356,89 @@ async def run_follow_up_mode(
     Returns:
         int: Exit code.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Select tools for initial prompt
-    tool_selector = ToolSelector(config, backend_manager)
-    selected_tool_names = await tool_selector.select_tools(
-        initial_prompt, 
-        backend_index=backend_index,
-        verbose=verbose,
-        log_file=log_file
-    )
-    
-    # Get selected tool instances
-    tools = get_enabled_tools(config, enable=selected_tool_names, disable=disable_tools)
-    
-    # Build initial system prompt
-    prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_system_prompt(tools)
-    
-    # Create chat session with model context window size
-    chat_session = ChatSession(
-        system_prompt,
-        client=backend.client,
-        model_name=backend.model
-    )
-    
-    # Process initial prompt
-    prompt = initial_prompt
-    
     try:
-        while True:
-            # Generate command
-            command = await generate_command(
-                config,
-                backend_index,
-                prompt,
-                verbose=verbose,
-                log_file=log_file,
-                enable_tools=enable_tools,
-                disable_tools=disable_tools,
-                chat_session=chat_session,
-                use_tool_selector=True
-            )
-            
-            # Ask for confirmation
-            confirmation = confirm_execution(command, chat_session)
-            
-            if confirmation == "regenerate":
-                # Regenerate the command
-                print("Regenerating command...")
-                continue
-            elif confirmation:
-                # Execute the command
-                print(f"Executing: {command}")
-                exit_code, _ = execute_command(command, chat_session)
-                
-                # If command failed, we still continue with the session
-                if exit_code != 0:
-                    print(f"Command exited with code {exit_code}")
-            else:
-                print("Command execution cancelled")
-            
-            # Ask for next prompt
-            try:
-                prompt = input("\nEnter next prompt (Ctrl+C to exit): ").strip()
-                if not prompt:
-                    continue
-            except KeyboardInterrupt:
-                print("\nExiting follow-up mode")
-                break
-                
-    except KeyboardInterrupt:
-        print("\nExiting follow-up mode")
+        # Get backend manager
+        backend_manager = BackendManager(config)
         
-    return 0
+        # Get backend
+        backend = backend_manager.get_backend(backend_index)
+        
+        # Select tools for initial prompt
+        tool_selector = ToolSelector(config, backend_manager)
+        selected_tool_names = await tool_selector.select_tools(
+            initial_prompt, 
+            backend_index=backend_index,
+            verbose=verbose,
+            log_file=log_file
+        )
+        
+        # Get selected tool instances
+        tools = get_enabled_tools(config, enable=selected_tool_names, disable=disable_tools)
+        
+        # Build initial system prompt
+        prompt_builder = PromptBuilder(config)
+        system_prompt = prompt_builder.build_system_prompt(tools)
+        
+        # Create chat session with model context window size
+        chat_session = ChatSession(
+            system_prompt,
+            client=backend.client,
+            model_name=backend.model
+        )
+        
+        # Process initial prompt
+        prompt = initial_prompt
+        
+        try:
+            while True:
+                # Generate command
+                command = await generate_command(
+                    config,
+                    backend_index,
+                    prompt,
+                    verbose=verbose,
+                    log_file=log_file,
+                    enable_tools=enable_tools,
+                    disable_tools=disable_tools,
+                    chat_session=chat_session,
+                    use_tool_selector=True
+                )
+                
+                # Ask for confirmation
+                confirmation = confirm_execution(command, chat_session)
+                
+                if confirmation == "regenerate":
+                    # Regenerate the command
+                    print("Regenerating command...")
+                    continue
+                elif confirmation:
+                    # Execute the command
+                    print(f"Executing: {command}")
+                    exit_code, _ = execute_command(command, chat_session)
+                    
+                    # If command failed, we still continue with the session
+                    if exit_code != 0:
+                        print(f"Command exited with code {exit_code}")
+                else:
+                    print("Command execution cancelled")
+                
+                # Ask for next prompt
+                try:
+                    prompt = input("\nEnter next prompt (Ctrl+C to exit): ").strip()
+                    if not prompt:
+                        continue
+                except KeyboardInterrupt:
+                    print("\nExiting follow-up mode")
+                    break
+                    
+        except KeyboardInterrupt:
+            print("\nExiting follow-up mode")
+            
+        return 0
+    except Exception as e:
+        print(f"Error in follow-up mode: {str(e)}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 def main() -> int:
@@ -480,65 +447,93 @@ def main() -> int:
     Returns:
         int: Exit code.
     """
-    # Parse arguments
-    args = parse_args(sys.argv[1:])
-    
-    # Show version and exit
-    if args.version:
-        from nlsh import __version__
-        print(f"nlsh version {__version__}")
-        return 0
-    
-    # Load configuration
-    config = Config(args.config)
-    
-    # List tools if requested
-    if args.list_tools:
-        all_tools = config.get_all_tools()
-        print("Available tools:")
-        for name, enabled in all_tools.items():
-            status = "enabled" if enabled else "disabled"
-            print(f"- {name}: {status}")
-        return 0
-    
-    # Check if we have a prompt
-    if not args.prompt and not args.prompt_file:
-        print("Error: No prompt provided")
-        return 1
-    
-    # Get prompt from file or command line
-    prompt = ""
-    if args.prompt_file:
-        prompt_builder = PromptBuilder(config)
-        prompt = prompt_builder.load_prompt_from_file(args.prompt_file)
-    else:
-        # Join all prompt arguments into a single string
-        prompt = " ".join(args.prompt) if args.prompt else ""
-    
-    # Check if follow-up mode is enabled
-    if args.follow_up:
-        # Follow-up mode requires interactive mode
-        if not args.interactive:
-            print("Follow-up mode requires interactive mode (-i)")
-            return 1
-            
-        # Run in follow-up mode
-        return asyncio.run(run_follow_up_mode(
-            config,
-            args.backend,
-            prompt,
-            verbose=args.verbose,
-            log_file=args.log_file,
-            enable_tools=args.enable_tool,
-            disable_tools=args.disable_tool
-        ))
-    
-    # Generate command
     try:
-        # Interactive mode with command regeneration
-        if args.interactive:
-            while True:
-                # Generate command
+        # Parse arguments
+        args = parse_args(sys.argv[1:])
+        
+        # Show version and exit
+        if args.version:
+            from nlsh import __version__
+            print(f"nlsh version {__version__}")
+            return 0
+        
+        # Load configuration
+        config = Config(args.config)
+        
+        # List tools if requested
+        if args.list_tools:
+            all_tools = config.get_all_tools()
+            print("Available tools:")
+            for name, enabled in all_tools.items():
+                status = "enabled" if enabled else "disabled"
+                print(f"- {name}: {status}")
+            return 0
+        
+        # Check if we have a prompt
+        if not args.prompt and not args.prompt_file:
+            print("Error: No prompt provided")
+            return 1
+        
+        # Get prompt from file or command line
+        prompt = ""
+        if args.prompt_file:
+            prompt_builder = PromptBuilder(config)
+            prompt = prompt_builder.load_prompt_from_file(args.prompt_file)
+        else:
+            # Join all prompt arguments into a single string
+            prompt = " ".join(args.prompt) if args.prompt else ""
+        
+        # Check if follow-up mode is enabled
+        if args.follow_up:
+            # Follow-up mode requires interactive mode
+            if not args.interactive:
+                print("Follow-up mode requires interactive mode (-i)")
+                return 1
+                
+            # Run in follow-up mode
+            return asyncio.run(run_follow_up_mode(
+                config,
+                args.backend,
+                prompt,
+                verbose=args.verbose,
+                log_file=args.log_file,
+                enable_tools=args.enable_tool,
+                disable_tools=args.disable_tool
+            ))
+        
+        # Generate command
+        try:
+            # Interactive mode with command regeneration
+            if args.interactive:
+                while True:
+                    # Generate command
+                    command = asyncio.run(generate_command(
+                        config, 
+                        args.backend, 
+                        prompt, 
+                        verbose=args.verbose,
+                        log_file=args.log_file,
+                        enable_tools=args.enable_tool,
+                        disable_tools=args.disable_tool
+                    ))
+                    
+                    # Ask for confirmation
+                    confirmation = confirm_execution(command)
+                    
+                    if confirmation == "regenerate":
+                        # Regenerate the command
+                        print("Regenerating command...")
+                        continue
+                    elif confirmation:
+                        print(f"Executing: {command}")
+                        # Actually execute the command
+                        exit_code, _ = execute_command(command)
+                        return exit_code
+                    else:
+                        print("Command execution cancelled")
+                        return 0
+            else:
+                # Non-interactive mode
                 command = asyncio.run(generate_command(
                     config, 
                     args.backend, 
@@ -549,39 +544,17 @@ def main() -> int:
                     disable_tools=args.disable_tool
                 ))
                 
-                # Ask for confirmation
-                confirmation = confirm_execution(command)
-                
-                if confirmation == "regenerate":
-                    # Regenerate the command
-                    print("Regenerating command...")
-                    continue
-                elif confirmation:
-                    print(f"Executing: {command}")
-                    # Actually execute the command
-                    exit_code, _ = execute_command(command)
-                    return exit_code
-                else:
-                    print("Command execution cancelled")
-                    return 0
-        else:
-            # Non-interactive mode
-            command = asyncio.run(generate_command(
-                config, 
-                args.backend, 
-                prompt, 
-                verbose=args.verbose,
-                log_file=args.log_file,
-                enable_tools=args.enable_tool,
-                disable_tools=args.disable_tool
-            ))
+                # Just print the command
+                print(command)
+                return 0
             
-            # Just print the command
-            print(command)
-            return 0
-        
+        except Exception as e:
+            print(f"Error generating command: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return 1
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Error: {str(e)}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 1
 
 

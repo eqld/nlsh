@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import re
+import traceback
 from typing import Dict, List, Optional, Any
 
 import openai
@@ -56,21 +57,59 @@ class LLMBackend:
         self.model = config.get("model", "")
         self.is_reasoning_model = config.get("is_reasoning_model", False)
         
+        # # Add debug logging
+        # print(f"DEBUG: Initializing backend {self.name}", file=sys.stderr)
+        # print(f"DEBUG: URL: {self.url}", file=sys.stderr)
+        # print(f"DEBUG: API Key: {'<empty>' if not self.api_key else '<set>'}", file=sys.stderr)
+        # print(f"DEBUG: Model: {self.model}", file=sys.stderr)
+        
         # Auto-detect reasoning models by name if not explicitly set
         if not self.is_reasoning_model and "reason" in self.name.lower():
             self.is_reasoning_model = True
         
-        # For local models, use a dummy API key if none is provided
+        # Handle API key for different types of backends
         api_key = self.api_key
-        if not api_key and ("localhost" in self.url or "127.0.0.1" in self.url):
-            api_key = "dummy_key"
+        
+        # For local models, we need a special approach to avoid authentication issues
+        is_local = "localhost" in self.url or "127.0.0.1" in self.url
+        # print(f"DEBUG: Is local model: {is_local}", file=sys.stderr)
+        
+        # Check if this is a dummy key for local models
+        is_dummy_key = api_key and (api_key.startswith("dummy") or api_key == "ollama")
+        # print(f"DEBUG: Is dummy key: {is_dummy_key}", file=sys.stderr)
         
         # Configure OpenAI client with timeout
-        self.client = openai.OpenAI(
-            base_url=self.url,
-            api_key=api_key,
-            timeout=120.0  # Increase timeout to 120 seconds for reasoning models
-        )
+        if is_local and (not api_key or is_dummy_key):
+            # For local models without an API key or with a dummy key, we need to avoid sending the Authorization header
+            # print(f"DEBUG: Using special handling for local model", file=sys.stderr)
+            # Create the client with default_headers that don't include Authorization
+            # Use a dummy key instead of None to avoid the OpenAI client error
+            self.client = openai.OpenAI(
+                base_url=self.url,
+                api_key="dummy-key",  # Use a dummy key instead of None
+                timeout=120.0,  # Increase timeout to 120 seconds for reasoning models
+                default_headers={"Content-Type": "application/json"}  # Only include Content-Type
+            )
+            
+            # Ensure no Authorization header is added
+            if hasattr(self.client, "_client") and hasattr(self.client._client, "headers"):
+                if "Authorization" in self.client._client.headers:
+                    del self.client._client.headers["Authorization"]
+                # print(f"DEBUG: Removed Authorization header from _client", file=sys.stderr)
+            
+            # Also handle the async client
+            if hasattr(self.client, "_async_client") and hasattr(self.client._async_client, "headers"):
+                if "Authorization" in self.client._async_client.headers:
+                    del self.client._async_client.headers["Authorization"]
+                # print(f"DEBUG: Removed Authorization header from _async_client", file=sys.stderr)
+        else:
+            # For all other cases, use the standard configuration
+            # print(f"DEBUG: Using standard configuration", file=sys.stderr)
+            self.client = openai.OpenAI(
+                base_url=self.url,
+                api_key=api_key,
+                timeout=120.0  # Increase timeout to 120 seconds for reasoning models
+            )
     
     async def generate_command(self, prompt: str, system_context: str, verbose: bool = False, chat_history: List[Dict[str, str]] = None) -> str:
         """Generate a shell command based on the prompt and context.
@@ -131,7 +170,11 @@ class LLMBackend:
                             full_response += delta.content
                 
                 sys.stderr.write("\n")
-                return strip_markdown_code_blocks(full_response.strip())
+                
+                # Strip markdown code blocks
+                stripped_response = strip_markdown_code_blocks(full_response.strip())
+                
+                return stripped_response
             else:
                 # Call the API without streaming
                 response = self.client.chat.completions.create(
@@ -145,11 +188,17 @@ class LLMBackend:
                 # Extract the generated command and strip any Markdown code blocks
                 if response.choices and len(response.choices) > 0:
                     content = response.choices[0].message.content.strip()
-                    return strip_markdown_code_blocks(content)
+                    
+                    # Strip markdown code blocks
+                    stripped_content = strip_markdown_code_blocks(content)
+                    
+                    return stripped_content
                 else:
                     return "Error: No response generated"
                 
         except Exception as e:
+            print(f"Error generating command: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             return f"Error generating command: {str(e)}"
 
 

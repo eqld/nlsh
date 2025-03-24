@@ -179,7 +179,6 @@ nlsh -i -f setup a python virtual environment
 # Executing: python -m venv myenv
 # ...
 # Enter next prompt (Ctrl+C to exit): activate the virtual environment
-# Context window: [██████░░░░░░░░░░░░░░░░░░░░░░░░] 20.5%
 # Selected tools: EnvInspector, SystemInfo
 # Suggested: source myenv/bin/activate
 # [Confirm] Run this command? (y/N/r) y
@@ -190,8 +189,6 @@ In follow-up mode:
 - The tool remembers previous prompts, commands, and their outputs
 - You can continue with related prompts without repeating context
 - Press Ctrl+C to exit the session
-- A context window usage bar shows how much of the available context is being used
-- The context window size is automatically determined based on the model being used
 
 ### Intelligent Tool Selection
 
