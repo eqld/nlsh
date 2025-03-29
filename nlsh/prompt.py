@@ -14,13 +14,15 @@ class PromptBuilder:
     
     # Base system prompt template
     BASE_SYSTEM_PROMPT = """You are an AI assistant that generates shell commands based on user requests.
-Your task is to generate a single shell command or a short script that accomplishes the user's request.
-Only generate commands for the {shell} shell.
-Do not include explanations or descriptions unless explicitly asked.
+Your task is to generate a single shell command or a short oneliner script that accomplishes the user's request.
+Only generate commands for the `{shell}` shell.
+Do not include explanations or descriptions.
 Ensure the commands are safe and do not cause data loss or security issues.
 Use the following system context to inform your command generation:
 
 {system_context}
+
+{declined_commands}
 
 Generate only the command, nothing else."""
     
@@ -33,11 +35,12 @@ Generate only the command, nothing else."""
         self.config = config
         self.shell = config.get_shell()
     
-    def build_system_prompt(self, tools: List[BaseTool]) -> str:
+    def build_system_prompt(self, tools: List[BaseTool], declined_commands: List[str] = []) -> str:
         """Build the system prompt with context from tools.
         
         Args:
             tools: List of tool instances.
+            declined_commands: List of declined commands.
             
         Returns:
             str: Formatted system prompt.
@@ -56,10 +59,15 @@ Generate only the command, nothing else."""
         # Join all context parts
         system_context = "\n\n".join(context_parts)
         
+        declined_commands_str = ""
+        if declined_commands:
+            declined_commands_str = "Do not generate these commands:\n" + "\n".join(declined_commands)
+
         # Format the base prompt with shell and system context
         return self.BASE_SYSTEM_PROMPT.format(
             shell=self.shell,
-            system_context=system_context
+            system_context=system_context,
+            declined_commands=declined_commands_str
         )
     
     def build_user_prompt(self, user_input: str) -> str:

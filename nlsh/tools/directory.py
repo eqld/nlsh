@@ -7,7 +7,6 @@ This module provides a tool for listing files in the current directory.
 import os
 import stat
 from datetime import datetime
-from pathlib import Path
 
 from nlsh.tools.base import BaseTool
 
