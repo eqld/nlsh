@@ -54,6 +54,7 @@ class LLMBackend:
         self.api_key = config.get("api_key", "")
         self.model = config.get("model", "")
         self.is_reasoning_model = config.get("is_reasoning_model", False)
+        self.timeout = float(config.get("timeout", 120.0))
         
         # Auto-detect reasoning models by name if not explicitly set
         if not self.is_reasoning_model and "reason" in self.name.lower():
@@ -62,8 +63,17 @@ class LLMBackend:
         # Handle API key for different types of backends
         api_key = self.api_key
         
-        # For local models, we need a special approach to avoid authentication issues
-        is_local = "localhost" in self.url or "127.0.0.1" in self.url
+        # Enhanced local backend detection
+        is_local = (
+            "localhost" in self.url or
+            "127.0.0.1" in self.url or
+            "::1" in self.url or
+            self.url.startswith("unix://")
+        )
+        
+        # For local models, increase timeout
+        if is_local:
+            self.timeout = float(config.get("timeout", 300.0))  # 5 minutes for local models
         
         # Check if this is a dummy key for local models
         is_dummy_key = api_key and (api_key.startswith("dummy") or api_key == "ollama")
@@ -80,7 +90,7 @@ class LLMBackend:
                 self.client = openai.OpenAI(
                     base_url=self.url,
                     api_key="dummy-key",
-                    timeout=120.0,
+                    timeout=self.timeout,
                     default_headers={
                         "Content-Type": "application/json"
                     }
@@ -97,7 +107,7 @@ class LLMBackend:
                 self.client = openai.OpenAI(
                     base_url=self.url,
                     api_key=self.api_key,
-                    timeout=120.0
+                    timeout=self.timeout
                 )
                 # Test the connection with a minimal request
                 if not is_dummy_key:

@@ -27,6 +27,7 @@ class Config:
                 "url": "https://api.openai.com/v1",
                 "api_key": "",  # Will be populated from environment variable
                 "model": "gpt-3.5-turbo",
+                "timeout": 120.0,  # Default timeout in seconds
                 "is_reasoning_model": False  # Flag to identify reasoning models
             }
         ],
@@ -121,6 +122,15 @@ class Config:
                         raise ConfigValidationError(
                             f"API key from environment variable {env_var} for backend {backend['name']} appears invalid (too short)"
                         )
+            
+            # Validate timeout
+            if "timeout" in backend:
+                try:
+                    timeout = float(backend["timeout"])
+                    if timeout <= 0:
+                        raise ConfigValidationError(f"Backend {i} timeout must be positive")
+                except ValueError:
+                    raise ConfigValidationError(f"Backend {i} timeout must be a number")
     
     def _load_config_file(self, config_file: str) -> None:
         """Load and validate configuration from file."""
