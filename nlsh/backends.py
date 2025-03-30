@@ -68,32 +68,45 @@ class LLMBackend:
         # Check if this is a dummy key for local models
         is_dummy_key = api_key and (api_key.startswith("dummy") or api_key == "ollama")
         
+        # Validate API key for non-local endpoints
+        if not is_local and not is_dummy_key:
+            if not self.api_key or len(self.api_key.strip()) < 8:
+                raise ValueError(f"Invalid API key configuration for backend {self.name}")
+        
         # Configure OpenAI client
-        if is_local:
-            # For local endpoints, don't send any auth headers
-            self.client = openai.OpenAI(
-                base_url=self.url,
-                api_key="dummy-key",
-                timeout=120.0,
-                default_headers={
-                    "Content-Type": "application/json"
-                }
-            )
-            
-            # Ensure both sync and async clients have no auth headers
-            for client_attr in ['_client', '_async_client']:
-                if hasattr(self.client, client_attr):
-                    client = getattr(self.client, client_attr)
-                    if hasattr(client, 'headers'):
-                        client.headers.clear()
-                        client.headers["Content-Type"] = "application/json"
-        else:
-            self.client = openai.OpenAI(
-                base_url=self.url,
-                api_key=self.api_key,
-                timeout=120.0
-            )
-    
+        try:
+            if is_local:
+                # For local endpoints, don't send any auth headers
+                self.client = openai.OpenAI(
+                    base_url=self.url,
+                    api_key="dummy-key",
+                    timeout=120.0,
+                    default_headers={
+                        "Content-Type": "application/json"
+                    }
+                )
+                
+                # Ensure both sync and async clients have no auth headers
+                for client_attr in ['_client', '_async_client']:
+                    if hasattr(self.client, client_attr):
+                        client = getattr(self.client, client_attr)
+                        if hasattr(client, 'headers'):
+                            client.headers.clear()
+                            client.headers["Content-Type"] = "application/json"
+            else:
+                self.client = openai.OpenAI(
+                    base_url=self.url,
+                    api_key=self.api_key,
+                    timeout=120.0
+                )
+                # Test the connection with a minimal request
+                if not is_dummy_key:
+                    self.client.models.list()
+        except openai.AuthenticationError as e:
+            raise ValueError(f"Authentication failed for backend {self.name}: {str(e)}")
+        except Exception as e:
+            raise ValueError(f"Failed to initialize backend {self.name}: {str(e)}")
+
     async def generate_command(self, prompt: str, system_context: str, verbose: bool = False) -> str:
         """Generate a shell command based on the prompt and context.
         
@@ -174,9 +187,12 @@ class LLMBackend:
                     return "Error: No response generated"
                 
         except openai.AuthenticationError as e:
-            print(f"Authentication failed for backend {self.name}: {str(e)}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            raise
+            error_msg = str(e)
+            if "api key" in error_msg.lower():
+                raise ValueError(
+                    f"Authentication failed for backend {self.name}. Please check your API key configuration."
+                )
+            raise ValueError(f"Authentication failed for backend {self.name}: {error_msg}")
         except Exception as e:
             print(f"Error generating command: {str(e)}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)

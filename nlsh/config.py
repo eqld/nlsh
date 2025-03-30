@@ -108,13 +108,18 @@ class Config:
                 if field not in backend:
                     raise ConfigValidationError(f"Backend {i} missing required field: {field}")
             
-            # Validate API key if it's an environment variable
+            # Validate API key format and environment variables
             if "api_key" in backend and isinstance(backend["api_key"], str):
                 if backend["api_key"].startswith("$"):
                     env_var = backend["api_key"][1:]
-                    if not os.environ.get(env_var):
+                    api_key = os.environ.get(env_var)
+                    if not api_key:
                         raise ConfigValidationError(
-                            f"Environment variable {env_var} for backend {backend['name']} API key is empty"
+                            f"Required environment variable {env_var} for backend {backend['name']} is not set"
+                        )
+                    if len(api_key.strip()) < 8:  # Basic validation for API key length
+                        raise ConfigValidationError(
+                            f"API key from environment variable {env_var} for backend {backend['name']} appears invalid (too short)"
                         )
     
     def _load_config_file(self, config_file: str) -> None:

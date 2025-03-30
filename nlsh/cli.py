@@ -283,7 +283,11 @@ def main() -> int:
             return 0
         
         # Load configuration
-        config = Config(args.config)
+        try:
+            config = Config(args.config)
+        except Exception as e:
+            print(f"Configuration error: {str(e)}", file=sys.stderr)
+            return 1
 
         # Check if we have a prompt
         if not args.prompt and not args.prompt_file:
@@ -334,6 +338,14 @@ def main() -> int:
                             return 0
                     
                     # If we got an error, return error code
+                    return 1
+                except ValueError as e:
+                    print(f"Error: {str(e)}", file=sys.stderr)
+                    if "API key" in str(e) or "Authentication failed" in str(e):
+                        print("\nTroubleshooting tips:", file=sys.stderr)
+                        print("1. Check that your API key is correctly set in the environment variable", file=sys.stderr)
+                        print("2. Verify the API key is valid with your provider", file=sys.stderr)
+                        print("3. Check the backend URL is correct in your configuration", file=sys.stderr)
                     return 1
                 except Exception as e:
                     print(f"Error: {str(e)}", file=sys.stderr)
