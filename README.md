@@ -131,10 +131,11 @@ The log file will contain JSON entries with timestamps, backend information, pro
 
 ### Verbose Mode
 
-Use `-v` or `--verbose` to display reasoning tokens for reasoning models:
+Use `-v` for reasoning tokens and `-vv` for additional debug information:
 
 ```bash
-nlsh -v -2 find all python files modified in the last week
+# Show reasoning (single verbose)
+nlsh -v find all python files modified in the last week
 # Example output:
 # Reasoning: I need to find Python files that were modified in the last 7 days.
 # The command to find files by extension is 'find' with the '-name' option.
@@ -142,9 +143,15 @@ nlsh -v -2 find all python files modified in the last week
 # Suggested: find . -name "*.py" -mtime -7
 # [Confirm] Run this command? (y/N/r) y
 # (command output appears here)
+
+# Show reasoning and debug info (double verbose)
+nlsh -vv count lines in python files
+# Example output:
+# Reasoning: Let's break this down...
+# (Plus stack traces and debug info in case of errors)
 ```
 
-This is particularly useful with reasoning models, which show their step-by-step thinking process. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer. In verbose mode, the command generation reasoning are streamed to STDERR.
+Single verbose mode (-v) shows the model's reasoning process, while double verbose mode (-vv) additionally displays stack traces and debug information when errors occur. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer.
 
 ### Custom Prompts
 

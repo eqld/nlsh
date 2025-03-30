@@ -49,8 +49,9 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     # Verbose mode
     parser.add_argument(
         "-v", "--verbose",
-        action="store_true",
-        help="Verbose mode (print reasoning tokens to stderr)"
+        action="count",
+        default=0,
+        help="Verbose mode (-v for reasoning tokens, -vv for debug info)"
     )
     
     # Configuration file
@@ -287,6 +288,8 @@ def main() -> int:
             config = Config(args.config)
         except Exception as e:
             print(f"Configuration error: {str(e)}", file=sys.stderr)
+            if args.verbose > 1:  # Show stack trace in double verbose mode
+                traceback.print_exc(file=sys.stderr)
             return 1
 
         # Check if we have a prompt
@@ -315,7 +318,7 @@ def main() -> int:
                         args.backend, 
                         prompt, 
                         declined_commands=declined_commands,
-                        verbose=args.verbose,
+                        verbose=args.verbose > 0,  # Single verbose for reasoning
                         log_file=args.log_file,
                     ))
                     
@@ -341,6 +344,8 @@ def main() -> int:
                     return 1
                 except ValueError as e:
                     print(f"Error: {str(e)}", file=sys.stderr)
+                    if args.verbose > 1:  # Show stack trace in double verbose mode
+                        traceback.print_exc(file=sys.stderr)
                     if "API key" in str(e) or "Authentication failed" in str(e):
                         print("\nTroubleshooting tips:", file=sys.stderr)
                         print("1. Check that your API key is correctly set in the environment variable", file=sys.stderr)
@@ -349,6 +354,8 @@ def main() -> int:
                     return 1
                 except Exception as e:
                     print(f"Error: {str(e)}", file=sys.stderr)
+                    if args.verbose > 1:  # Show stack trace in double verbose mode
+                        traceback.print_exc(file=sys.stderr)
                     return 1
         except Exception as e:
             print(f"Error generating command: {str(e)}", file=sys.stderr)
@@ -359,7 +366,8 @@ def main() -> int:
         return 130
     except Exception as e:
         print(f"Error: {str(e)}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        if args.verbose > 1:  # Show stack trace in double verbose mode
+            traceback.print_exc(file=sys.stderr)
         return 1
 
 
