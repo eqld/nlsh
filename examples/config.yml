@@ -28,14 +28,3 @@ backends:
 # Default backend to use (index in the backends list, starting from 0)
 # Override with environment variable: NLSH_DEFAULT_BACKEND
 default_backend: 0
-
-# System tools configuration
-tools:
-  # List of enabled tools
-  enabled:
-    - DirLister             # Lists files in current directory
-    - EnvInspector          # Reports environment variables
-    - SystemInfo            # Provides OS and architecture information
-    - ShellHistoryInspector # Analyzes recent command history
-    - ProcessSniffer        # Identifies running processes
-    - NetworkInfo           # Lists open ports and active connections

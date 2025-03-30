@@ -8,11 +8,13 @@ import argparse
 import asyncio
 import datetime
 import json
+import locale
 import os
+import signal
 import subprocess
 import sys
 import traceback
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union, TextIO
 
 from nlsh.config import Config
 from nlsh.backends import BackendManager
@@ -106,12 +108,15 @@ async def generate_command(
         
     Returns:
         str: Generated shell command.
+        
+    Raises:
+        Exception: If command generation fails.
     """
     # Get backend manager
     backend_manager = BackendManager(config)
     
     # Get tools
-    tools = get_tools()
+    tools = get_tools(config=config)
     
     # Build prompt
     prompt_builder = PromptBuilder(config)
@@ -158,6 +163,10 @@ async def generate_command(
                 print(f"Error writing to log file: {str(e)}", file=sys.stderr)
         
         return response
+    except Exception as e:
+        print(f"Error generating command: {str(e)}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        raise  # Re-raise the exception instead of returning error message
     finally:
         # Stop spinner
         if spinner:
@@ -182,56 +191,76 @@ def confirm_execution(command: str) -> Union[bool, str]:
     return response in ["y", "yes"]
 
 
-def execute_command(command: str) -> int:
-    """Execute a shell command.
+def handle_keyboard_interrupt(signum: int, frame: Any) -> None:
+    """Handle keyboard interrupt (Ctrl+C)."""
+    print("\nOperation cancelled by user", file=sys.stderr)
+    sys.exit(130)  # 128 + SIGINT
+
+
+def safe_write(stream: TextIO, text: str) -> None:
+    """Safely write text to a stream, handling encoding errors.
     
     Args:
-        command: Command to execute.
-        
-    Returns:
-        Tuple[int, str]: Exit code and command output.
+        stream: Output stream (stdout/stderr).
+        text: Text to write.
     """
     try:
-        # Use the user's shell to execute the command
-        shell = os.environ.get("SHELL", "/bin/sh")
+        stream.write(text)
+        stream.flush()
+    except UnicodeEncodeError:
+        # Fall back to ascii with replacement characters
+        stream.write(text.encode(stream.encoding or 'ascii', 'replace').decode())
+        stream.flush()
 
-        # Execute the command in the user's shell
+
+def execute_command(command: str) -> int:
+    """Execute a shell command safely."""
+    try:
+        shell = os.environ.get("SHELL", "/bin/sh")
+        
+        # Set up signal handler for Ctrl+C
+        signal.signal(signal.SIGINT, handle_keyboard_interrupt)
+        
+        # Get system encoding
+        system_encoding = locale.getpreferredencoding()
+        
         process = subprocess.Popen(
             command,
             shell=True,
             executable=shell,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            bufsize=1,  # Line buffered
+            encoding=system_encoding,
+            errors='replace'  # Replace invalid characters
         )
         
-        # Stream output in real-time and capture it
         while True:
-            stdout_line = process.stdout.readline()
-            stderr_line = process.stderr.readline()
+            stdout_line = process.stdout.readline() if process.stdout else ''
+            stderr_line = process.stderr.readline() if process.stderr else ''
             
-            if stdout_line:
-                print(stdout_line, end="")
-            if stderr_line:
-                print(stderr_line, end="", file=sys.stderr)
-                
-            # Check if process has finished
-            if process.poll() is not None and not stdout_line and not stderr_line:
+            if not stdout_line and not stderr_line and process.poll() is not None:
                 break
+                
+            if stdout_line:
+                safe_write(sys.stdout, stdout_line)
+            if stderr_line:
+                safe_write(sys.stderr, stderr_line)
         
-        # Get any remaining output
-        stdout, stderr = process.communicate()
-        if stdout:
-            print(stdout, end="")
-        if stderr:
-            print(stderr, end="", file=sys.stderr)
-
-        return process.returncode
+        return process.wait()
         
+    except KeyboardInterrupt:
+        if process:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        print("\nCommand interrupted", file=sys.stderr)
+        return 130
     except Exception as e:
-        error_msg = f"Error executing command: {str(e)}"
-        print(error_msg, file=sys.stderr)
-        return 1, error_msg
+        print(f"Error executing command: {str(e)}", file=sys.stderr)
+        return 1
 
 
 def main() -> int:
@@ -240,6 +269,9 @@ def main() -> int:
     Returns:
         int: Exit code.
     """
+    # Set up signal handler for Ctrl+C
+    signal.signal(signal.SIGINT, handle_keyboard_interrupt)
+    
     try:
         # Parse arguments
         args = parse_args(sys.argv[1:])
@@ -272,35 +304,47 @@ def main() -> int:
             declined_commands = []
             # Interactive mode with command regeneration
             while True:
-                # Generate command
-                command = asyncio.run(generate_command(
-                    config, 
-                    args.backend, 
-                    prompt, 
-                    declined_commands=declined_commands,
-                    verbose=args.verbose,
-                    log_file=args.log_file,
-                ))
-                
-                # Ask for confirmation
-                confirmation = confirm_execution(command)
-                
-                if confirmation == "regenerate":
-                    # Regenerate the command
-                    print("Regenerating command...")
-                    declined_commands.append(command)
-                    continue
-                elif confirmation:
-                    print(f"Executing: {command}")
-                    # Actually execute the command
-                    return execute_command(command)
-                else:
-                    print("Command execution cancelled")
-                    return 0
+                try:
+                    # Generate command
+                    command = asyncio.run(generate_command(
+                        config, 
+                        args.backend, 
+                        prompt, 
+                        declined_commands=declined_commands,
+                        verbose=args.verbose,
+                        log_file=args.log_file,
+                    ))
+                    
+                    # Ask for confirmation only if command generation succeeded
+                    if not command.startswith("Error:"):
+                        # Ask for confirmation
+                        confirmation = confirm_execution(command)
+                        
+                        if confirmation == "regenerate":
+                            # Regenerate the command
+                            print("Regenerating command...")
+                            declined_commands.append(command)
+                            continue
+                        elif confirmation:
+                            print(f"Executing: {command}")
+                            # Actually execute the command
+                            return execute_command(command)
+                        else:
+                            print("Command execution cancelled")
+                            return 0
+                    
+                    # If we got an error, return error code
+                    return 1
+                except Exception as e:
+                    print(f"Error: {str(e)}", file=sys.stderr)
+                    return 1
         except Exception as e:
             print(f"Error generating command: {str(e)}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             return 1
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user", file=sys.stderr)
+        return 130
     except Exception as e:
         print(f"Error: {str(e)}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)

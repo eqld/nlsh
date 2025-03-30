@@ -30,22 +30,16 @@ class SystemInfo(BaseTool):
         # Distribution information (for Linux)
         if platform.system() == "Linux":
             try:
-                # Try to get distribution information
-                distro_info = " ".join(platform.linux_distribution())
-                system_info.append(f"Distribution: {distro_info}")
+                # Use /etc/os-release as the primary source
+                if os.path.exists("/etc/os-release"):
+                    with open("/etc/os-release", "r") as f:
+                        for line in f:
+                            if line.startswith("PRETTY_NAME="):
+                                distro = line.split("=")[1].strip().strip('"')
+                                system_info.append(f"Distribution: {distro}")
+                                break
             except:
-                # platform.linux_distribution() is deprecated and may not be available
-                try:
-                    # Alternative method to get distribution info
-                    if os.path.exists("/etc/os-release"):
-                        with open("/etc/os-release", "r") as f:
-                            for line in f:
-                                if line.startswith("PRETTY_NAME="):
-                                    distro = line.split("=")[1].strip().strip('"')
-                                    system_info.append(f"Distribution: {distro}")
-                                    break
-                except:
-                    pass
+                pass
         
         # macOS version
         if platform.system() == "Darwin":

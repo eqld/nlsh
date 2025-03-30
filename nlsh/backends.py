@@ -68,34 +68,30 @@ class LLMBackend:
         # Check if this is a dummy key for local models
         is_dummy_key = api_key and (api_key.startswith("dummy") or api_key == "ollama")
         
-        # Configure OpenAI client with timeout
-        if is_local and (not api_key or is_dummy_key):
-            # For local models without an API key or with a dummy key, we need to avoid sending the Authorization header
-            
-            # Create the client with default_headers that don't include Authorization
-            # Use a dummy key instead of None to avoid the OpenAI client error
+        # Configure OpenAI client
+        if is_local:
+            # For local endpoints, don't send any auth headers
             self.client = openai.OpenAI(
                 base_url=self.url,
-                api_key="dummy-key", # Use a dummy key instead of None
-                timeout=120.0,       # Increase timeout to 120 seconds for reasoning models
-                default_headers={"Content-Type": "application/json"} # Only include Content-Type
+                api_key="dummy-key",
+                timeout=120.0,
+                default_headers={
+                    "Content-Type": "application/json"
+                }
             )
             
-            # Ensure no Authorization header is added
-            if hasattr(self.client, "_client") and hasattr(self.client._client, "headers"):
-                if "Authorization" in self.client._client.headers:
-                    del self.client._client.headers["Authorization"]
-            
-            # Also handle the async client
-            if hasattr(self.client, "_async_client") and hasattr(self.client._async_client, "headers"):
-                if "Authorization" in self.client._async_client.headers:
-                    del self.client._async_client.headers["Authorization"]
+            # Ensure both sync and async clients have no auth headers
+            for client_attr in ['_client', '_async_client']:
+                if hasattr(self.client, client_attr):
+                    client = getattr(self.client, client_attr)
+                    if hasattr(client, 'headers'):
+                        client.headers.clear()
+                        client.headers["Content-Type"] = "application/json"
         else:
-            # For all other cases, use the standard configuration
             self.client = openai.OpenAI(
                 base_url=self.url,
-                api_key=api_key,
-                timeout=120.0 # Increase timeout to 120 seconds for reasoning models
+                api_key=self.api_key,
+                timeout=120.0
             )
     
     async def generate_command(self, prompt: str, system_context: str, verbose: bool = False) -> str:
@@ -177,11 +173,14 @@ class LLMBackend:
                 else:
                     return "Error: No response generated"
                 
+        except openai.AuthenticationError as e:
+            print(f"Authentication failed for backend {self.name}: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            raise
         except Exception as e:
             print(f"Error generating command: {str(e)}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-            return f"Error generating command: {str(e)}"
-
+            raise
 
 class BackendManager:
     """Manager for LLM backends."""

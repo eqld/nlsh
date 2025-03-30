@@ -6,7 +6,13 @@ This module provides functionality for loading and managing configuration.
 
 import os
 from pathlib import Path
+from typing import Dict, List, Optional, Any
 import yaml
+
+
+class ConfigValidationError(Exception):
+    """Configuration validation error."""
+    pass
 
 
 class Config:
@@ -27,7 +33,7 @@ class Config:
         "default_backend": 0
     }
     
-    def __init__(self, config_path=None):
+    def __init__(self, config_path: Optional[str] = None) -> None:
         """Initialize configuration.
         
         Args:
@@ -44,7 +50,7 @@ class Config:
         # Apply environment variable overrides
         self._apply_env_overrides()
     
-    def _find_config_file(self, config_path=None):
+    def _find_config_file(self, config_path: Optional[str] = None) -> Optional[Path]:
         """Find configuration file.
         
         Args:
@@ -73,23 +79,60 @@ class Config:
         # No config file found
         return None
     
-    def _load_config_file(self, config_file):
-        """Load configuration from file.
+    def _validate_config(self, config: Dict[str, Any]) -> None:
+        """Validate configuration structure and values.
         
         Args:
-            config_file: Path to configuration file.
+            config: Configuration dictionary to validate.
+            
+        Raises:
+            ConfigValidationError: If configuration is invalid.
         """
+        # Validate shell
+        if not isinstance(config.get("shell"), str):
+            raise ConfigValidationError("Shell must be a string")
+        if config["shell"] not in ["bash", "zsh", "fish", "powershell"]:
+            raise ConfigValidationError("Shell must be one of: bash, zsh, fish, powershell")
+            
+        # Validate backends
+        if not isinstance(config.get("backends"), list):
+            raise ConfigValidationError("Backends must be a list")
+        if not config["backends"]:
+            raise ConfigValidationError("At least one backend must be configured")
+            
+        for i, backend in enumerate(config["backends"]):
+            if not isinstance(backend, dict):
+                raise ConfigValidationError(f"Backend {i} must be an object")
+            required_fields = ["name", "url", "model"]
+            for field in required_fields:
+                if field not in backend:
+                    raise ConfigValidationError(f"Backend {i} missing required field: {field}")
+            
+            # Validate API key if it's an environment variable
+            if "api_key" in backend and isinstance(backend["api_key"], str):
+                if backend["api_key"].startswith("$"):
+                    env_var = backend["api_key"][1:]
+                    if not os.environ.get(env_var):
+                        raise ConfigValidationError(
+                            f"Environment variable {env_var} for backend {backend['name']} API key is empty"
+                        )
+    
+    def _load_config_file(self, config_file: str) -> None:
+        """Load and validate configuration from file."""
         try:
             with open(config_file, 'r') as f:
                 file_config = yaml.safe_load(f)
                 
-            # Update configuration with values from file
+            # Validate configuration
             if file_config:
+                self._validate_config(file_config)
                 self._update_config(self.config, file_config)
+        except yaml.YAMLError as e:
+            raise ConfigValidationError(f"Invalid YAML in config file: {e}")
         except Exception as e:
-            print(f"Error loading configuration file: {e}")
+            raise ConfigValidationError(f"Error loading config file: {e}")
     
-    def _update_config(self, base_config, new_config):
+    def _update_config(self, base_config: Dict[str, Any], new_config: Dict[str, Any]) -> None:
         """Recursively update configuration.
         
         Args:
@@ -104,7 +147,7 @@ class Config:
                 # Update value
                 base_config[key] = value
     
-    def _apply_env_overrides(self):
+    def _apply_env_overrides(self) -> None:
         """Apply environment variable overrides to configuration."""
         # Override shell
         if "NLSH_SHELL" in os.environ:
@@ -131,11 +174,17 @@ class Config:
                     backend["api_key"] = os.environ[env_var_name]
                     
             # Handle environment variable references in API key
-            if isinstance(backend["api_key"], str) and backend["api_key"].startswith("$"):
-                env_var = backend["api_key"][1:]
-                backend["api_key"] = os.environ.get(env_var, "")
-    
-    def get_shell(self):
+            if "api_key" in backend and isinstance(backend["api_key"], str):
+                if backend["api_key"].startswith("$"):
+                    env_var = backend["api_key"][1:]
+                    api_key = os.environ.get(env_var, "")
+                    if not api_key:
+                        raise ConfigValidationError(
+                            f"Environment variable {env_var} for backend {backend['name']} API key is empty"
+                        )
+                    backend["api_key"] = api_key
+
+    def get_shell(self) -> str:
         """Get configured shell.
         
         Returns:
@@ -143,7 +192,7 @@ class Config:
         """
         return self.config["shell"]
     
-    def get_backend(self, index=None):
+    def get_backend(self, index: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Get backend configuration.
         
         Args:
@@ -160,4 +209,3 @@ class Config:
         except IndexError:
             # Fall back to first backend if index is invalid
             return self.config["backends"][0] if self.config["backends"] else None
-    
