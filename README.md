@@ -5,7 +5,7 @@
 ## Features
 
 * 🔄 **Multi-Backend LLM Support**\
-Configure multiple OpenAI-compatible endpoints (e.g., local Ollama, Groq, Mistral API) and switch them using -0, -1, etc.
+Configure multiple OpenAI-compatible endpoints (e.g., local Ollama, DeepSeek API, Mistral API) and switch them using -0, -1, etc.
 * 🐚 **Shell-Aware Generation**\
 Set your shell (bash/zsh/fish/powershell) via config/env to ensure syntax compatibility.
 * 🛡️ **Safety First**\
