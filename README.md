@@ -6,6 +6,8 @@
 
 * 🔄 **Multi-Backend LLM Support**\
 Configure multiple OpenAI-compatible endpoints (e.g., local Ollama, DeepSeek API, Mistral API) and switch them using -0, -1, etc.
+* 🧠 **System-Aware Context**\
+Automatically gathers information about your environment to generate commands tailored to your system.
 * 🐚 **Shell-Aware Generation**\
 Set your shell (bash/zsh/fish/powershell) via config/env to ensure syntax compatibility.
 * 🛡️ **Safety First**\
@@ -40,6 +42,15 @@ YAML configuration for backends and shell preferences.
    ```
 
 4. Set up your API keys
+   ```bash
+   # Edit the config file to add your API keys
+   nano ~/.nlsh/config.yml
+   
+   # Or set them as environment variables
+   export OPENAI_API_KEY=sk-...
+   export GROQ_KEY=gsk_...
+   export DEEPSEEK_API_KEY=...
+   ```
 
 It is also available in `pip`:
 
@@ -181,6 +192,20 @@ nlsh -i find large files
 ```
 
 This tells the model not to suggest the same command again and to try a different approach.
+
+### System Context Tools
+
+`nlsh` uses a set of system tools to gather context information about your environment. This context is included in the prompt sent to the LLM, enabling it to generate more accurate and relevant shell commands tailored to your specific system.
+
+These tools include:
+
+* **DirLister**: Lists non-hidden files in the current directory with metadata (file type, size, modification time). This helps the LLM understand what files are available in your working directory.
+
+* **EnvInspector**: Reports environment variables (with sensitive information redacted) to ensure compatibility with your system. This includes shell information, PATH entries, and other important environment variables that might affect command execution.
+
+* **SystemInfo**: Provides OS, kernel, and architecture context. This includes information about your operating system, version, distribution (for Linux), architecture, and Python environment, helping the LLM generate commands that are compatible with your system.
+
+The context from these tools is automatically included in every prompt sent to the LLM, requiring no user configuration. This system-aware approach allows `nlsh` to generate commands that are more likely to work correctly on your specific system configuration.
 
 ### Request Logging
 
