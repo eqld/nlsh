@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nlsh"
-version = "0.1.0"  # Make sure this matches nlsh/__init__.py
+version = "1.0.0"
 description = "Neural Shell (nlsh) - AI-driven command-line assistant"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [
-  { name = "eqld", email = "44535024+eqld@users.noreply.github.com" }, # Replace with actual email if known
+  { name = "eqld", email = "44535024+eqld@users.noreply.github.com" },
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

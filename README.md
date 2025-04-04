@@ -41,7 +41,7 @@ YAML configuration for backends and shell preferences.
 
 4. Set up your API keys
 
-In the future it will be available in `pip`:
+It is also available in `pip`:
 
 ```bash
 pip install nlsh
