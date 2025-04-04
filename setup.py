@@ -32,6 +32,7 @@ setup(
     entry_points={
         "console_scripts": [
             "nlsh=nlsh.cli:main",
+            "nlgc=nlsh.git_commit:main",
         ],
     },
     install_requires=[
