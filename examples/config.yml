@@ -28,3 +28,11 @@ backends:
 # Default backend to use (index in the backends list, starting from 0)
 # Override with environment variable: NLSH_DEFAULT_BACKEND
 default_backend: 0
+
+# Configuration for the 'nlgc' (Neural Git Commit) command
+# Override with environment variable: NLSH_NLGC_INCLUDE_FULL_FILES (true/false)
+nlgc:
+  # Whether to include the full content of changed files in the prompt
+  # sent to the LLM for commit message generation. Provides more context
+  # but increases token usage significantly.
+  include_full_files: true

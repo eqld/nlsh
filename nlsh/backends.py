@@ -32,9 +32,11 @@ def strip_markdown_code_blocks(text: str) -> str:
     pattern = r"```(?:[a-zA-Z0-9_+-]+)?\n?(.*?)\n?```"
     result = re.sub(pattern, r"\1", text, flags=re.DOTALL)
     
-    # Handle single line code blocks
+    # Handle the case where the entire response is enclosed in single backticks
     # Pattern: `code`
-    result = re.sub(r"`(.*?)`", r"\1", result)
+    stripped_result = result.strip()
+    if stripped_result.startswith("`") and stripped_result.endswith("`"):
+        result = stripped_result[1:-1]
     
     return result.strip()
 

@@ -31,7 +31,10 @@ class Config:
                 "is_reasoning_model": False  # Flag to identify reasoning models
             }
         ],
-        "default_backend": 0
+        "default_backend": 0,
+        "nlgc": {
+            "include_full_files": True  # Whether nlgc includes full file content by default
+        }
     }
     
     def __init__(self, config_path: Optional[str] = None) -> None:
@@ -131,7 +134,15 @@ class Config:
                         raise ConfigValidationError(f"Backend {i} timeout must be positive")
                 except ValueError:
                     raise ConfigValidationError(f"Backend {i} timeout must be a number")
-    
+
+        # Validate nlgc section (optional)
+        if "nlgc" in config:
+            if not isinstance(config["nlgc"], dict):
+                raise ConfigValidationError("nlgc section must be an object")
+            if "include_full_files" in config["nlgc"]:
+                if not isinstance(config["nlgc"]["include_full_files"], bool):
+                    raise ConfigValidationError("nlgc.include_full_files must be a boolean")
+
     def _load_config_file(self, config_file: str) -> None:
         """Load and validate configuration from file."""
         try:
@@ -198,6 +209,14 @@ class Config:
                             f"Environment variable {env_var} for backend {backend['name']} API key is empty"
                         )
                     backend["api_key"] = api_key
+        
+        # Override nlgc settings
+        if "NLSH_NLGC_INCLUDE_FULL_FILES" in os.environ:
+            env_val = os.environ["NLSH_NLGC_INCLUDE_FULL_FILES"].lower()
+            if env_val in ["true", "1", "yes"]:
+                self.config.setdefault("nlgc", {})["include_full_files"] = True
+            elif env_val in ["false", "0", "no"]:
+                self.config.setdefault("nlgc", {})["include_full_files"] = False
 
     def get_shell(self) -> str:
         """Get configured shell.
@@ -224,3 +243,12 @@ class Config:
         except IndexError:
             # Fall back to first backend if index is invalid
             return self.config["backends"][0] if self.config["backends"] else None
+
+    def get_nlgc_config(self) -> Dict[str, Any]:
+        """Get nlgc specific configuration.
+        
+        Returns:
+            dict: nlgc configuration dictionary.
+        """
+        # Return the nlgc section, falling back to default if not present
+        return self.config.get("nlgc", self.DEFAULT_CONFIG["nlgc"])

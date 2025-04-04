@@ -225,6 +225,8 @@ def execute_command(command: str) -> int:
         # Get system encoding
         system_encoding = locale.getpreferredencoding()
         
+        # Security Note: Using shell=True can be risky if the command is crafted maliciously.
+        # User confirmation (confirm_execution) is the primary safeguard.
         process = subprocess.Popen(
             command,
             shell=True,
@@ -236,6 +238,7 @@ def execute_command(command: str) -> int:
             errors='replace'  # Replace invalid characters
         )
         
+        # Note: Reading line-by-line may not render interactive command output (e.g., progress bars) correctly.
         while True:
             stdout_line = process.stdout.readline() if process.stdout else ''
             stderr_line = process.stderr.readline() if process.stderr else ''
