@@ -44,7 +44,7 @@ YAML configuration for backends and shell preferences.
 It is also available in `pip`:
 
 ```bash
-pip install nlsh
+pip install neural-shell
 ```
 
 ## Usage

@@ -3,8 +3,8 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nlsh"
-version = "1.0.0"
+name = "neural-shell"
+version = "1.0.1"
 description = "Neural Shell (nlsh) - AI-driven command-line assistant"
 readme = "README.md"
 requires-python = ">=3.8"

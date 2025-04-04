@@ -13,20 +13,20 @@ with open(os.path.join("nlsh", "__init__.py"), "r") as f:
             version = line.split("=")[1].strip().strip('"').strip("'")
             break
     else:
-        version = "1.0.0"
+        version = "1.0.1"
 
 # Get long description from README
 with open("README.md", "r") as f:
     long_description = f.read()
 
 setup(
-    name="nlsh",
+    name="neural-shell",
     version=version,
     description="Neural Shell - AI-driven command-line assistant",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="eqld",
-    author_email="",  # Add author email if available
+    author_email="44535024+eqld@users.noreply.github.com",
     url="https://github.com/eqld/nlsh",
     packages=find_packages(),
     entry_points={
