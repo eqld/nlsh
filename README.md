@@ -47,6 +47,8 @@ It is also available in `pip`:
 pip install neural-shell
 ```
 
+See: https://pypi.org/project/neural-shell/.
+
 ## Usage
 
 Basic usage:
