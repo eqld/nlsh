@@ -18,9 +18,12 @@ from typing import Any, List, Optional, Union, TextIO
 
 from nlsh.config import Config
 from nlsh.backends import BackendManager, LLMBackend
+from nlsh.config import Config
+from nlsh.backends import BackendManager, LLMBackend
 from nlsh.tools import get_tools
 from nlsh.prompt import PromptBuilder
 from nlsh.spinner import Spinner
+from nlsh.editor import edit_text_in_editor
 
 
 def parse_args(args: List[str]) -> argparse.Namespace:
@@ -208,13 +211,15 @@ def confirm_execution(command: str) -> Union[bool, str]:
         
     Returns:
         Union[bool, str]: True if confirmed, False if declined, "regenerate" if regeneration requested,
-                         "explain" if explanation requested.
+                        "explain" if explanation requested, "edit" if editing requested.
     """
     print(f"Suggested: {command}")
-    response = input("[Confirm] Run this command? (y/N/r/x) ").strip().lower()
+    response = input("[Confirm] Run this command? (y/N/e/r/x) ").strip().lower()
     
     if response in ["r", "regenerate"]:
         return "regenerate"
+    elif response in ["e", "edit"]:
+        return "edit"
     elif response in ["x", "explain"]:
         return "explain"
     
@@ -394,6 +399,25 @@ def main() -> int:
                                 print("Regenerating command...")
                                 declined_commands.append(command)
                                 break  # Break the inner loop to regenerate
+                            elif confirmation == "edit":
+                                edited_command = edit_text_in_editor(command, suffix=".sh")
+
+                                if edited_command is None:
+                                    # Edit was cancelled, errored, or resulted in empty command.
+                                    # Go back to the confirmation prompt for the original command.
+                                    print("Edit cancelled or failed. Returning to original command confirmation.", file=sys.stderr)
+                                    continue 
+                                
+                                if edited_command == command:
+                                    print("Command unchanged.", file=sys.stderr)
+                                    # Go back to confirmation prompt for original command
+                                    continue
+
+                                # Confirm execution of the edited command
+                                print(f"\nEdited command: {edited_command}")
+                                command = edited_command
+                                # Go back to confirmation prompt for edited command
+                                continue
                             elif confirmation == "explain":
                                 # Generate explanation
                                 try:

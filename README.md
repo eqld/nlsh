@@ -67,8 +67,21 @@ Basic usage:
 nlsh -1 find all pdfs modified in the last 2 days and compress them
 # Example output:
 # Suggested: find . -name "*.pdf" -mtime -2 -exec tar czvf archive.tar.gz {} +
-# [Confirm] Run this command? (y/N/r/x) y
+# [Confirm] Run this command? (y/N/e/r/x) y 
 # Executing:
+# (command output appears here)
+
+# Edit the suggested command before running:
+nlsh -1 list all files in the current directory
+# Example output:
+# Suggested: ls -la
+# [Confirm] Run this command? (y/N/e/r/x) e
+# (Opens your $EDITOR with 'ls -la')
+# (Edit the command, e.g., to 'ls -l')
+# (Save and close editor)
+# Edited command: ls -l
+# [Confirm] Run this command? (y/N/e/r/x) y
+# Executing: ls -l
 # (command output appears here)
 ```
 
@@ -79,7 +92,7 @@ nlsh -v -2 count lines of code in all javascript files
 # Reasoning: To count lines of code in JavaScript files, I can use the 'find' command to locate all .js files,
 # then pipe the results to 'xargs wc -l' to count the lines in each file.
 # Suggested: find . -name "*.js" -type f | xargs wc -l
-# [Confirm] Run this command? (y/N/r) y
+# [Confirm] Run this command? (y/N/e/r/x) y 
 # Executing:
 # (command output appears here)
 ```
@@ -184,7 +197,7 @@ You can get a detailed explanation of a suggested command by responding with 'x'
 nlsh find all log files larger than 10MB
 # Example output:
 # Suggested: find . -name "*.log" -size +10M
-# [Confirm] Run this command? (y/N/r/x) x
+# [Confirm] Run this command? (y/N/e/r/x) x
 # 
 # Explanation:
 # ----------------------------------------
@@ -197,7 +210,7 @@ nlsh find all log files larger than 10MB
 # 
 # The command will recursively search through all subdirectories and display the paths of matching files.
 # ----------------------------------------
-# [Confirm] Run this command? (y/N/r/x) y
+# [Confirm] Run this command? (y/N/e/r/x) y
 # Executing:
 # (command output appears here)
 ```
@@ -212,10 +225,10 @@ You can ask for a different command by responding with 'r':
 nlsh -i find large files
 # Example output:
 # Suggested: find . -type f -size +100M
-# [Confirm] Run this command? (y/N/r/x) r
+# [Confirm] Run this command? (y/N/e/r/x) r
 # Regenerating command...
 # Suggested: du -h -d 1 | sort -hr
-# [Confirm] Run this command? (y/N/r/x) y
+# [Confirm] Run this command? (y/N/e/r/x) y
 # (command output appears here)
 ```
 
@@ -257,7 +270,7 @@ nlsh -v find all python files modified in the last week
 # The command to find files by extension is 'find' with the '-name' option.
 # To filter by modification time, I'll use '-mtime -7' which means "modified less than 7 days ago".
 # Suggested: find . -name "*.py" -mtime -7
-# [Confirm] Run this command? (y/N/r) y
+# [Confirm] Run this command? (y/N/e/r/x) y
 # (command output appears here)
 
 # Show reasoning and debug info (double verbose)
@@ -287,7 +300,7 @@ nlsh --prompt-file migration_task.txt
 
 ## Security
 
-* Command execution requires explicit user confirmation (`y/N/r` or `y/N/e/r` for `nlgc`).
+* Command execution requires explicit user confirmation (`y/N/e/r/x` for `nlsh` or `y/N/e/r` for `nlgc`).
 * Commands are only displayed and never executed automatically.
 * All generated commands are shown to the user before any execution.
 * `nlsh` uses `subprocess.Popen` with `shell=True` to execute the generated commands. While necessary for interpreting complex shell syntax, this carries inherent risks if a user confirms a malicious command. The mandatory confirmation step is the primary safeguard against accidental execution of harmful commands. Always review suggested commands carefully.

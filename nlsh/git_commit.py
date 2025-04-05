@@ -23,6 +23,7 @@ from nlsh.config import Config, ConfigValidationError
 from nlsh.backends import BackendManager
 from nlsh.spinner import Spinner
 from nlsh.cli import handle_keyboard_interrupt, safe_write # Reuse existing handlers
+from nlsh.editor import edit_text_in_editor # Import the shared editor function
 
 
 # Custom Exceptions
@@ -441,46 +442,24 @@ async def _async_main(config: Config, args: argparse.Namespace) -> int: # Accept
                     declined_messages.append(commit_message)
                     continue
                 elif confirmation == "edit":
-                    # Basic editor support (could be enhanced)
-                    editor = os.environ.get("EDITOR", "vim") # Fallback to vim
-                    try:
-                        # Write message to temp file
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=".txt") as tf:
-                            tf.write(commit_message)
-                            temp_file_path = tf.name
-                        
-                        # Open editor
-                        subprocess.run([editor, temp_file_path], check=True)
-                        
-                        # Read edited message
-                        with open(temp_file_path, 'r') as tf:
-                            edited_message = tf.read().strip()
-                        
-                        os.remove(temp_file_path) # Clean up temp file
+                    # Use the shared editor function
+                    edited_message = edit_text_in_editor(commit_message, suffix=".txt")
 
-                        if not edited_message:
-                            print("Edit cancelled or message empty.", file=sys.stderr)
-                            return 1
-                        
-                        print("\nUsing edited message:")
-                        print("-" * 20)
-                        print(edited_message)
-                        print("-" * 20)
-                        if input("Commit with this message? (y/N) ").strip().lower() == 'y':
-                            return run_git_commit(edited_message)
-                        else:
-                            print("Commit cancelled.")
-                            return 0
+                    if edited_message is None:
+                        # Edit was cancelled, errored, or resulted in empty message.
+                        print("Edit cancelled or failed. Aborting commit.", file=sys.stderr)
+                        return 1 # Exit with error as commit cannot proceed
 
-                    except Exception as edit_err:
-                        print(f"Error during editing: {edit_err}", file=sys.stderr)
-                        print("Falling back to original message confirmation.")
-                        if input("Commit with the original suggested message? (y/N) ").strip().lower() == 'y':
-                            return run_git_commit(commit_message)
-                        else:
-                            print("Commit cancelled.")
-                            return 0
+                    # Confirm commit with the edited message
+                    print("\nUsing edited message:")
+                    print("-" * 20)
+                    print(edited_message)
+                    print("-" * 20)
+                    if input("Commit with this message? (y/N) ").strip().lower() == 'y':
+                        return run_git_commit(edited_message)
+                    else:
+                        print("Commit cancelled.")
+                        return 0
                 elif confirmation:
                     return run_git_commit(commit_message)
                 else:
