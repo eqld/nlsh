@@ -17,7 +17,7 @@ import traceback
 from typing import Any, List, Optional, Union, TextIO
 
 from nlsh.config import Config
-from nlsh.backends import BackendManager
+from nlsh.backends import BackendManager, LLMBackend
 from nlsh.tools import get_tools
 from nlsh.prompt import PromptBuilder
 from nlsh.spinner import Spinner
@@ -136,38 +136,64 @@ async def generate_command(
     try:
         # Generate command
         response = await backend.generate_command(user_prompt, system_prompt, verbose=verbose)
-        
-        # Log request and response if log file is specified
-        if log_file:
-            log_entry = {
-                "timestamp": datetime.datetime.now().isoformat(),
-                "backend": {
-                    "name": backend.name,
-                    "model": backend.model,
-                    "url": backend.url
-                },
-                "prompt": prompt,
-                "system_context": system_prompt,
-                "response": response
-            }
-            
-            try:
-                # Create directory if it doesn't exist
-                log_dir = os.path.dirname(log_file)
-                if log_dir and not os.path.exists(log_dir):
-                    os.makedirs(log_dir)
-                
-                # Append to log file
-                with open(log_file, 'a') as f:
-                    f.write(json.dumps(log_entry, indent=2) + "\n")
-            except Exception as e:
-                print(f"Error writing to log file: {str(e)}", file=sys.stderr)
-        
+        log(log_file, backend, system_prompt, prompt, response)
         return response
     except Exception as e:
         print(f"Error generating command: {str(e)}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         raise  # Re-raise the exception instead of returning error message
+    finally:
+        # Stop spinner
+        if spinner:
+            spinner.stop()
+
+
+async def explain_command(
+    config: Config,
+    backend_index: Optional[int],
+    command: str,
+    verbose: int,
+    log_file: Optional[str] = None
+) -> str:
+    """Generate an explanation for a shell command.
+    
+    Args:
+        config: Configuration object.
+        backend_index: Backend index to use.
+        command: Shell command to explain.
+        verbose: Verbosity mode.
+        log_file: Optional path to log file.
+        
+    Returns:
+        str: Generated explanation.
+        
+    Raises:
+        Exception: If explanation generation fails.
+    """
+    # Get backend manager
+    backend_manager = BackendManager(config)
+    
+    # Get tools
+    tools = get_tools(config=config)
+    
+    # Build prompt
+    prompt_builder = PromptBuilder(config)
+    system_prompt = prompt_builder.build_explanation_system_prompt(tools)
+    
+    # Get backend
+    backend = backend_manager.get_backend(backend_index)
+    
+    # Start spinner if not in verbose mode
+    spinner = None
+    if verbose == 0:
+        spinner = Spinner("Explaining")
+        spinner.start()
+    
+    try:
+        # Generate explanation
+        explanation = await backend.generate_explanation(command, system_prompt, verbose=verbose)
+        log(log_file, backend, system_prompt, command, explanation)
+        return explanation
     finally:
         # Stop spinner
         if spinner:
@@ -181,13 +207,16 @@ def confirm_execution(command: str) -> Union[bool, str]:
         command: Command to execute.
         
     Returns:
-        Union[bool, str]: True if confirmed, False if declined, "regenerate" if regeneration requested.
+        Union[bool, str]: True if confirmed, False if declined, "regenerate" if regeneration requested,
+                         "explain" if explanation requested.
     """
     print(f"Suggested: {command}")
-    response = input("[Confirm] Run this command? (y/N/r) ").strip().lower()
+    response = input("[Confirm] Run this command? (y/N/r/x) ").strip().lower()
     
     if response in ["r", "regenerate"]:
         return "regenerate"
+    elif response in ["x", "explain"]:
+        return "explain"
     
     return response in ["y", "yes"]
 
@@ -267,6 +296,35 @@ def execute_command(command: str) -> int:
         return 1
 
 
+def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, response: str):
+    if not log_file:
+        return
+    
+    log_entry = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "backend": {
+            "name": backend.name,
+            "model": backend.model,
+            "url": backend.url
+        },
+        "prompt": prompt,
+        "system_context": system_prompt,
+        "response": response
+    }
+
+    try:
+        # Create directory if it doesn't exist
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        
+        # Append to log file
+        with open(log_file, 'a') as f:
+            f.write(json.dumps(log_entry, indent=2) + "\n")
+    except Exception as e:
+        print(f"Error writing to log file: {str(e)}", file=sys.stderr)
+
+
 def main() -> int:
     """Main entry point.
     
@@ -327,21 +385,47 @@ def main() -> int:
                     
                     # Ask for confirmation only if command generation succeeded
                     if not command.startswith("Error:"):
-                        # Ask for confirmation
-                        confirmation = confirm_execution(command)
+                        while True:
+                            # Ask for confirmation
+                            confirmation = confirm_execution(command)
+                            
+                            if confirmation == "regenerate":
+                                # Regenerate the command
+                                print("Regenerating command...")
+                                declined_commands.append(command)
+                                break  # Break the inner loop to regenerate
+                            elif confirmation == "explain":
+                                # Generate explanation
+                                try:
+                                    explanation = asyncio.run(explain_command(
+                                        config,
+                                        args.backend,
+                                        command,
+                                        verbose=args.verbose,
+                                        log_file=args.log_file,
+                                    ))
+                                    print("\nExplanation:")
+                                    print("-" * 40)
+                                    print(explanation)
+                                    print("-" * 40)
+                                    # Continue with confirmation after explanation
+                                    continue
+                                except Exception as e:
+                                    print(f"Error generating explanation: {str(e)}", file=sys.stderr)
+                                    if args.verbose > 1:  # Show stack trace in double verbose mode
+                                        traceback.print_exc(file=sys.stderr)
+                                    # Continue with confirmation despite explanation error
+                                    continue
+                            elif confirmation:
+                                print(f"Executing: {command}")
+                                # Actually execute the command
+                                return execute_command(command)
+                            else:
+                                print("Command execution cancelled")
+                                return 0
                         
-                        if confirmation == "regenerate":
-                            # Regenerate the command
-                            print("Regenerating command...")
-                            declined_commands.append(command)
-                            continue
-                        elif confirmation:
-                            print(f"Executing: {command}")
-                            # Actually execute the command
-                            return execute_command(command)
-                        else:
-                            print("Command execution cancelled")
-                            return 0
+                        # If we're here, we need to regenerate the command
+                        continue
                     
                     # If we got an error, return error code
                     return 1

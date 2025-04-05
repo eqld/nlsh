@@ -67,7 +67,7 @@ Basic usage:
 nlsh -1 find all pdfs modified in the last 2 days and compress them
 # Example output:
 # Suggested: find . -name "*.pdf" -mtime -2 -exec tar czvf archive.tar.gz {} +
-# [Confirm] Run this command? (y/N/r) y
+# [Confirm] Run this command? (y/N/r/x) y
 # Executing:
 # (command output appears here)
 ```
@@ -176,6 +176,34 @@ You can override configuration settings using environment variables:
 
 ## Advanced Features
 
+### Command Explanation
+
+You can get a detailed explanation of a suggested command by responding with 'x':
+
+```bash
+nlsh find all log files larger than 10MB
+# Example output:
+# Suggested: find . -name "*.log" -size +10M
+# [Confirm] Run this command? (y/N/r/x) x
+# 
+# Explanation:
+# ----------------------------------------
+# This command searches for log files larger than 10MB in the current directory and its subdirectories.
+# 
+# Breaking it down:
+# - `find .` - Starts the find command to search from the current directory (.)
+# - `-name "*.log"` - Looks for files with names ending in .log
+# - `-size +10M` - Filters for files larger than 10MB
+# 
+# The command will recursively search through all subdirectories and display the paths of matching files.
+# ----------------------------------------
+# [Confirm] Run this command? (y/N/r/x) y
+# Executing:
+# (command output appears here)
+```
+
+This feature helps you understand complex commands before executing them, which is especially useful for learning new shell commands or verifying that a suggested command does what you expect.
+
 ### Command Regeneration
 
 You can ask for a different command by responding with 'r':
@@ -184,10 +212,10 @@ You can ask for a different command by responding with 'r':
 nlsh -i find large files
 # Example output:
 # Suggested: find . -type f -size +100M
-# [Confirm] Run this command? (y/N/r) r
+# [Confirm] Run this command? (y/N/r/x) r
 # Regenerating command...
 # Suggested: du -h -d 1 | sort -hr
-# [Confirm] Run this command? (y/N/r) y
+# [Confirm] Run this command? (y/N/r/x) y
 # (command output appears here)
 ```
 

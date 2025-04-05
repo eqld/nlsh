@@ -25,6 +25,17 @@ Use the following system context to inform your command generation:
 {declined_commands}
 
 Generate only the command, nothing else."""
+
+    # Explanation system prompt template
+    EXPLANATION_SYSTEM_PROMPT = """You are an AI assistant that explains shell commands or one-liner scripts in detail.
+User will provide you a shell command or one-liner script for `{shell}` and your task is to provide a clear, detailed explanation of it.
+Explain what it does, how it works, and the purpose of each part or flag.
+Break down complex commands or scripts into understandable components.
+If there are potential risks or side effects, mention them, and suggest alternative approaches or improvements.
+
+Use the following system context to inform your explanation:
+
+{system_context}"""
     
     def __init__(self, config):
         """Initialize the prompt builder.
@@ -35,17 +46,8 @@ Generate only the command, nothing else."""
         self.config = config
         self.shell = config.get_shell()
     
-    def build_system_prompt(self, tools: List[BaseTool], declined_commands: List[str] = []) -> str:
-        """Build the system prompt with context from tools.
-        
-        Args:
-            tools: List of tool instances.
-            declined_commands: List of declined commands.
-            
-        Returns:
-            str: Formatted system prompt.
-        """
-        # Gather context from all tools
+
+    def _gather_tools_context(self, tools: List[BaseTool]) -> str:
         context_parts = []
         for tool in tools:
             try:
@@ -58,6 +60,35 @@ Generate only the command, nothing else."""
         
         # Join all context parts
         system_context = "\n\n".join(context_parts)
+        return system_context
+
+    def build_explanation_system_prompt(self, tools: List[BaseTool]):
+        """Build the explanation system prompt with context from tools.
+        
+        Args:
+            tools: List of tool instances.
+            
+        Returns:
+            str: Formatted system prompt.
+        """
+        system_context = self._gather_tools_context(tools)
+
+        return self.EXPLANATION_SYSTEM_PROMPT.format(
+            shell=self.shell,
+            system_context=system_context
+        )
+
+    def build_system_prompt(self, tools: List[BaseTool], declined_commands: List[str] = []) -> str:
+        """Build the system prompt with context from tools.
+        
+        Args:
+            tools: List of tool instances.
+            declined_commands: List of declined commands.
+            
+        Returns:
+            str: Formatted system prompt.
+        """
+        system_context = self._gather_tools_context(tools)
         
         declined_commands_str = ""
         if declined_commands:

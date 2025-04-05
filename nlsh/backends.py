@@ -130,6 +130,33 @@ class LLMBackend:
         Returns:
             str: Generated shell command.
         """
+        return await self._generate_response(prompt, system_context, verbose)
+    
+    async def generate_explanation(self, command: str, system_context: str, verbose: bool = False) -> str:
+        """Generate an explanation for a shell command.
+        
+        Args:
+            command: Shell command to explain.
+            system_context: System context information.
+            verbose: Whether to print reasoning tokens to stderr.
+            
+        Returns:
+            str: Generated explanation.
+        """
+        return await self._generate_response(command, system_context, verbose, strip_markdown=False, max_tokens=1000)
+    
+    async def _generate_response(self, prompt: str, system_context: str, verbose: bool = False, strip_markdown: bool = True, max_tokens: int = 500) -> str:
+        """Generate a response from the LLM based on the prompt and context.
+        
+        Args:
+            prompt: User prompt.
+            system_context: System context information.
+            verbose: Whether to print reasoning tokens to stderr.
+            strip_markdown: Whether to strip markdown code blocks from the response.
+            
+        Returns:
+            str: Generated response.
+        """
         try:
             # Create messages for the chat completion
             messages = [
@@ -146,10 +173,10 @@ class LLMBackend:
                 stream = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.2,  # Lower temperature for more deterministic outputs
-                    max_tokens=500,   # Limit response length
-                    n=1,              # Generate a single response
-                    stream=True       # Enable streaming
+                    temperature=0.2,       # Lower temperature for more deterministic outputs
+                    max_tokens=max_tokens, # Limit response length
+                    n=1,                   # Generate a single response
+                    stream=True            # Enable streaming
                 )
                 
                 # Process the stream
@@ -173,28 +200,32 @@ class LLMBackend:
                 
                 sys.stderr.write("\n")
                 
-                # Strip markdown code blocks
-                stripped_response = strip_markdown_code_blocks(full_response.strip())
+                # Process the response
+                response_text = full_response.strip()
+                if strip_markdown:
+                    response_text = strip_markdown_code_blocks(response_text)
                 
-                return stripped_response
+                return response_text
             else:
                 # Call the API without streaming
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.2,  # Lower temperature for more deterministic outputs
-                    max_tokens=500,   # Limit response length
-                    n=1               # Generate a single response
+                    temperature=0.2,       # Lower temperature for more deterministic outputs
+                    max_tokens=max_tokens, # Limit response length
+                    n=1                    # Generate a single response
                 )
                 
                 # Extract the generated command and strip any Markdown code blocks
                 if response.choices and len(response.choices) > 0:
                     content = response.choices[0].message.content.strip()
                     
-                    # Strip markdown code blocks
-                    stripped_content = strip_markdown_code_blocks(content)
+                    # Process the content
+                    response_text = content
+                    if strip_markdown:
+                        response_text = strip_markdown_code_blocks(response_text)
                     
-                    return stripped_content
+                    return response_text
                 else:
                     return "Error: No response generated"
                 
