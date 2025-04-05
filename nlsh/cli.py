@@ -98,7 +98,7 @@ async def generate_command(
     prompt: str,
     declined_commands: List[str] = [],
     verbose: bool = False, 
-    log_file: Optional[str] = None
+    log_file: Optional[str] = None,
 ) -> str:
     """Generate a command using the specified backend.
     
@@ -126,6 +126,7 @@ async def generate_command(
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_system_prompt(tools, declined_commands)
     user_prompt = prompt_builder.build_user_prompt(prompt)
+    regeneration_count = len(declined_commands)
     
     # Get backend
     backend = backend_manager.get_backend(backend_index)
@@ -138,7 +139,7 @@ async def generate_command(
     
     try:
         # Generate command
-        response = await backend.generate_command(user_prompt, system_prompt, verbose=verbose)
+        response = await backend.generate_response(user_prompt, system_prompt, verbose=verbose, regeneration_count=regeneration_count)
         log(log_file, backend, system_prompt, prompt, response)
         return response
     except Exception as e:
@@ -194,7 +195,7 @@ async def explain_command(
     
     try:
         # Generate explanation
-        explanation = await backend.generate_explanation(command, system_prompt, verbose=verbose)
+        explanation = await backend.generate_response(command, system_prompt, verbose=verbose, strip_markdown=False, max_tokens=1000)
         log(log_file, backend, system_prompt, command, explanation)
         return explanation
     finally:

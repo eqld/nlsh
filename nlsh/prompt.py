@@ -36,6 +36,14 @@ If there are potential risks or side effects, mention them, and suggest alternat
 Use the following system context to inform your explanation:
 
 {system_context}"""
+
+    # Git commit system prompt template
+    GIT_COMMIT_SYSTEM_PROMPT = """You are an AI assistant that generates concise git commit messages following conventional commit standards (e.g., 'feat: description').
+user will provide you a git diff and optionally the full content of changed files, and you have to create a suitable commit message summarizing the changes.
+Output only the commit message (subject and optional body). Do not include explanations or markdown formatting like ```.
+
+{declined_messages}
+"""
     
     def __init__(self, config):
         """Initialize the prompt builder.
@@ -99,6 +107,23 @@ Use the following system context to inform your explanation:
             shell=self.shell,
             system_context=system_context,
             declined_commands=declined_commands_str
+        )
+    
+    def build_git_commit_system_prompt(self, declined_messages: List[str] = []) -> str:
+        """Build the system prompt for git commit message generation.
+        
+        Args:
+            declined_messages: List of declined commit messages.
+            
+        Returns:
+            str: Formatted system prompt for git commit message generation.
+        """
+        declined_messages_str = ""
+        if declined_messages:
+            declined_messages_str = "The following commit messages were previously declined by the user, so propose something different:\n\n" + "\n\n----------------\n\n".join(declined_messages)
+            
+        return self.GIT_COMMIT_SYSTEM_PROMPT.format(
+            declined_messages=declined_messages_str
         )
     
     def build_user_prompt(self, user_input: str) -> str:

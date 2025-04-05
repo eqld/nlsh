@@ -8,8 +8,6 @@ which generates Git commit messages based on staged changes.
 
 import argparse
 import asyncio
-import datetime
-import json
 import os
 import signal
 import subprocess
@@ -22,8 +20,9 @@ import openai  # For catching potential API errors like context length
 from nlsh.config import Config, ConfigValidationError
 from nlsh.backends import BackendManager
 from nlsh.spinner import Spinner
-from nlsh.cli import handle_keyboard_interrupt, safe_write # Reuse existing handlers
-from nlsh.editor import edit_text_in_editor # Import the shared editor function
+from nlsh.cli import handle_keyboard_interrupt, log
+from nlsh.editor import edit_text_in_editor
+from nlsh.prompt import PromptBuilder
 
 
 # Custom Exceptions
@@ -44,18 +43,8 @@ class EmptyCommitMessageError(NlgcError):
     pass
 
 
-# System prompt template for commit message generation
-GIT_COMMIT_SYSTEM_PROMPT = """You are an AI assistant that generates concise git commit messages following conventional commit standards (e.g., 'feat: description'). Analyze the provided git diff and the full content of changed files (if provided) to create a suitable commit message summarizing the changes. Output only the commit message (subject and optional body). Do not include explanations or markdown formatting like ```.
-
-{file_content_section}
-
-Git Diff:
-```diff
-{git_diff}
-```
-"""
-
 FILE_CONTENT_HEADER = "Full content of changed files:"
+GIT_COMMIT_MESSAGE_MAX_TOKENS = 150
 
 
 def parse_args(args: List[str]) -> argparse.Namespace:
@@ -223,8 +212,7 @@ async def generate_commit_message(
     changed_files_content: Optional[Dict[str, str]], # Dict of {filepath: content}
     declined_messages: List[str] = [],
     verbose: bool = False,
-    print_stack_trace: bool = False,
-    log_file: Optional[str] = None
+    log_file: Optional[str] = None,
 ) -> str:
     """Generate a commit message using the specified backend.
 
@@ -236,25 +224,22 @@ async def generate_commit_message(
     backend_manager = BackendManager(config)
     backend = backend_manager.get_backend(backend_index)
 
-    # Prepare file content section for the prompt
-    file_content_section = ""
-    if changed_files_content:
-        file_content_section += FILE_CONTENT_HEADER + "\n"
-        for file_path, content in changed_files_content.items():
-            file_content_section += f"--- {file_path} ---\n"
-            file_content_section += content + "\n\n"
-        file_content_section = file_content_section.strip() # Remove trailing newlines
+    regeneration_count = len(declined_messages)
 
-    # Build the system prompt
-    system_prompt = GIT_COMMIT_SYSTEM_PROMPT.format(
-        git_diff=git_diff,
-        file_content_section=file_content_section
-    )
+    # Build the system prompt using PromptBuilder
+    prompt_builder = PromptBuilder(config)
+    system_prompt = prompt_builder.build_git_commit_system_prompt(declined_messages)
     
-    # Add declined messages if any
-    user_prompt = "Generate a commit message." # Simple user prompt
-    if declined_messages:
-        user_prompt += "\nDo not suggest the following messages:\n" + "\n".join(f"- {msg}" for msg in declined_messages)
+    # Build the user prompt with git diff and file content
+    user_prompt = "Generate a commit message for the following changes:\n\n"
+    user_prompt += "Git Diff:\n```diff\n" + git_diff + "\n```\n\n"
+    
+    # Add file content if available
+    if changed_files_content:
+        user_prompt += FILE_CONTENT_HEADER + "\n"
+        for file_path, content in changed_files_content.items():
+            user_prompt += f"--- {file_path} ---\n"
+            user_prompt += content + "\n\n"
 
     spinner = None
     if not verbose:
@@ -264,59 +249,16 @@ async def generate_commit_message(
     error_msg = None
 
     try:
-        # Generate commit message using a simplified call (no tools needed here)
-        # Reusing generate_command logic structure but with specific prompt
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        response_content = ""
-        
-        if verbose:
-            full_response = ""
-            sys.stderr.write("Reasoning: ")
-            stream = backend.client.chat.completions.create(
-                model=backend.model, messages=messages, temperature=0.2, max_tokens=150, n=1, stream=True
-            )
-            for chunk in stream:
-                if chunk.choices and len(chunk.choices) > 0:
-                    delta = chunk.choices[0].delta
-                    if hasattr(delta, 'content') and delta.content:
-                        # Reasoning models might have specific fields, adjust if needed
-                        sys.stderr.write(delta.content)
-                        sys.stderr.flush()
-                        full_response += delta.content
-            sys.stderr.write("\n")
-            response_content = full_response.strip()
-        else:
-            response = backend.client.chat.completions.create(
-                model=backend.model, messages=messages, temperature=0.2, max_tokens=150, n=1
-            )
-            if response.choices and len(response.choices) > 0:
-                response_content = response.choices[0].message.content.strip()
+        response_content = await backend.generate_response(
+            user_prompt, 
+            system_prompt, 
+            verbose=verbose, 
+            strip_markdown=True,
+            max_tokens=GIT_COMMIT_MESSAGE_MAX_TOKENS, 
+            regeneration_count=regeneration_count
+        )
 
-        # Basic cleanup - remove potential markdown fences if LLM didn't obey
-        if response_content.startswith("```") and response_content.endswith("```"):
-            response_content = response_content[3:-3].strip()
-        if response_content.startswith("`") and response_content.endswith("`"):
-            response_content = response_content[1:-1].strip()
-
-        # Log if needed
-        if log_file:
-            log_entry = {
-                "timestamp": datetime.datetime.now().isoformat(),
-                "backend": {"name": backend.name, "model": backend.model, "url": backend.url},
-                "system_prompt": system_prompt, # Log the full prompt
-                "user_prompt": user_prompt,
-                "response": response_content
-            }
-            try:
-                log_dir = os.path.dirname(log_file)
-                if log_dir and not os.path.exists(log_dir): os.makedirs(log_dir)
-                with open(log_file, 'a') as f: f.write(json.dumps(log_entry, indent=2) + "\n")
-            except Exception as e:
-                print(f"Error writing to log file: {str(e)}", file=sys.stderr)
+        log(log_file, backend, system_prompt, user_prompt, response_content)
 
         if not response_content:
             raise EmptyCommitMessageError("LLM returned an empty commit message.")
@@ -430,7 +372,6 @@ async def _async_main(config: Config, args: argparse.Namespace) -> int: # Accept
                     changed_files_content,
                     declined_messages=declined_messages,
                     verbose=args.verbose > 0,
-                    print_stack_trace=args.verbose > 1,
                     log_file=args.log_file,
                 )
 

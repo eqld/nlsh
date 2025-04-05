@@ -119,33 +119,7 @@ class LLMBackend:
         except Exception as e:
             raise ValueError(f"Failed to initialize backend {self.name}: {str(e)}")
 
-    async def generate_command(self, prompt: str, system_context: str, verbose: bool = False) -> str:
-        """Generate a shell command based on the prompt and context.
-        
-        Args:
-            prompt: User prompt.
-            system_context: System context information.
-            verbose: Whether to print reasoning tokens to stderr.
-            
-        Returns:
-            str: Generated shell command.
-        """
-        return await self._generate_response(prompt, system_context, verbose)
-    
-    async def generate_explanation(self, command: str, system_context: str, verbose: bool = False) -> str:
-        """Generate an explanation for a shell command.
-        
-        Args:
-            command: Shell command to explain.
-            system_context: System context information.
-            verbose: Whether to print reasoning tokens to stderr.
-            
-        Returns:
-            str: Generated explanation.
-        """
-        return await self._generate_response(command, system_context, verbose, strip_markdown=False, max_tokens=1000)
-    
-    async def _generate_response(self, prompt: str, system_context: str, verbose: bool = False, strip_markdown: bool = True, max_tokens: int = 500) -> str:
+    async def generate_response(self, prompt: str, system_context: str, verbose: bool = False, strip_markdown: bool = True, max_tokens: int = 500, regeneration_count: int = 0) -> str:
         """Generate a response from the LLM based on the prompt and context.
         
         Args:
@@ -168,15 +142,17 @@ class LLMBackend:
                 # Use streaming mode to show reasoning tokens
                 full_response = ""
                 sys.stderr.write("Reasoning: ")
+
+                temperature = self._calculate_temperature(regeneration_count)
                 
                 # Call the API with streaming
                 stream = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.2,       # Lower temperature for more deterministic outputs
-                    max_tokens=max_tokens, # Limit response length
-                    n=1,                   # Generate a single response
-                    stream=True            # Enable streaming
+                    temperature=temperature,  # Adjust temperature based on regeneration count
+                    max_tokens=max_tokens,    # Limit response length
+                    n=1,                      # Generate a single response
+                    stream=True               # Enable streaming
                 )
                 
                 # Process the stream
@@ -207,13 +183,15 @@ class LLMBackend:
                 
                 return response_text
             else:
+                temperature = self._calculate_temperature(regeneration_count)
+                
                 # Call the API without streaming
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.2,       # Lower temperature for more deterministic outputs
-                    max_tokens=max_tokens, # Limit response length
-                    n=1                    # Generate a single response
+                    temperature=temperature,  # Adjust temperature based on regeneration count
+                    max_tokens=max_tokens,    # Limit response length
+                    n=1                       # Generate a single response
                 )
                 
                 # Extract the generated command and strip any Markdown code blocks
@@ -240,6 +218,10 @@ class LLMBackend:
             print(f"Error generating command: {str(e)}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             raise
+
+    def _calculate_temperature(self, regeneration_count: int) -> float:
+        # Calculate temperature based on regeneration count (0.2 base, +0.1 per regeneration, max 1.0)
+        return min(0.2 + (regeneration_count * 0.1), 1.0)
 
 class BackendManager:
     """Manager for LLM backends."""

@@ -232,7 +232,7 @@ nlsh -i find large files
 # (command output appears here)
 ```
 
-This tells the model not to suggest the same command again and to try a different approach.
+This tells the model not to suggest the same command again and to try a different approach. To encourage more diverse suggestions with each regeneration attempt, the temperature parameter (which controls randomness) is automatically increased by 0.1 for each regeneration, starting from 0.2 and capping at 1.0. This applies to both `nlsh` command generation and `nlgc` commit message generation.
 
 ### System Context Tools
 
