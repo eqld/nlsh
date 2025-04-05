@@ -63,6 +63,13 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         help="Path to configuration file"
     )
     
+    # Initialize configuration
+    parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Initialize a new configuration file"
+    )
+    
     # Prompt file
     parser.add_argument(
         "--prompt-file",
@@ -344,6 +351,11 @@ def main() -> int:
         # Parse arguments
         args = parse_args(sys.argv[1:])
         
+        # Handle --init flag
+        if args.init:
+            Config.create_default_config()
+            return 0
+        
         # Show version and exit
         if args.version:
             from nlsh import __version__
@@ -353,6 +365,12 @@ def main() -> int:
         # Load configuration
         try:
             config = Config(args.config)
+            
+            # Notify if no config file was found
+            if not config.config_file_found:
+                print("Note: No configuration file found at default locations.", file=sys.stderr)
+                print("Using default configuration. Run 'nlsh --init' to create a config file.", file=sys.stderr)
+                print()
         except Exception as e:
             print(f"Configuration error: {str(e)}", file=sys.stderr)
             if args.verbose > 1:  # Show stack trace in double verbose mode

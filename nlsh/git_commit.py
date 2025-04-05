@@ -77,6 +77,13 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         help="Path to configuration file"
     )
     
+    # Initialize configuration
+    parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Initialize a new configuration file"
+    )
+    
     # Log file (similar to nlsh)
     parser.add_argument(
         "--log-file",
@@ -444,9 +451,22 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_keyboard_interrupt)
     exit_code = 1 # Default exit code
     try:
-        # Parse args and load config here so errors happen before asyncio.run
+        # Parse args
         args = parse_args(sys.argv[1:])
+        
+        # Handle --init flag
+        if args.init:
+            Config.create_default_config()
+            sys.exit(0)
+        
+        # Load config
         config = Config(args.config)
+        
+        # Notify if no config file was found
+        if not config.config_file_found:
+            print("Note: No configuration file found at default locations.", file=sys.stderr)
+            print("Using default configuration. Run 'nlgc --init' to create a config file.", file=sys.stderr)
+            print()
         
         # Pass config and args directly to the async function
         exit_code = asyncio.run(_async_main(config, args))

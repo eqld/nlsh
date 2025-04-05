@@ -45,14 +45,34 @@ class Config:
                 If not provided, will look in default locations.
         """
         self.config = self.DEFAULT_CONFIG.copy()
+        self.config_file_found = False  # Track if config file was found
+        self.config_file_path = None    # Store the path that was found or would be used
         
         # Load configuration from file
         config_file = self._find_config_file(config_path)
         if config_file:
+            self.config_file_found = True
+            self.config_file_path = config_file
             self._load_config_file(config_file)
+        else:
+            # Store the default path that would be used
+            self.config_file_path = self._get_default_config_path()
             
         # Apply environment variable overrides
         self._apply_env_overrides()
+    
+    def _get_default_config_path(self) -> Path:
+        """Get the default path where config file would be created.
+        
+        Returns:
+            Path: Default configuration file path.
+        """
+        # Prefer XDG_CONFIG_HOME if set
+        if "XDG_CONFIG_HOME" in os.environ:
+            return Path(os.environ["XDG_CONFIG_HOME"]) / "nlsh" / "config.yml"
+        
+        # Otherwise use ~/.nlsh
+        return Path.home() / ".nlsh" / "config.yml"
     
     def _find_config_file(self, config_path: Optional[str] = None) -> Optional[Path]:
         """Find configuration file.
@@ -252,3 +272,41 @@ class Config:
         """
         # Return the nlgc section, falling back to default if not present
         return self.config.get("nlgc", self.DEFAULT_CONFIG["nlgc"])
+        
+    @staticmethod
+    def create_default_config(config_path: Optional[Path] = None) -> Path:
+        """Create a default configuration file.
+        
+        Args:
+            config_path: Optional path where to create the config file.
+                If not provided, will ask user for preference.
+                
+        Returns:
+            Path: Path to the created config file.
+        """
+        if config_path is None:
+            if "XDG_CONFIG_HOME" in os.environ:
+                # Ask user preference for config location
+                print("Where would you like to create the config file?")
+                print(f"1. {Path(os.environ['XDG_CONFIG_HOME'])}/nlsh/config.yml (default)")
+                print("2. ~/.nlsh/config.yml")
+                choice = input("Enter choice [1/2]: ").strip()
+                
+                if choice == "2":
+                    config_path = Path.home() / ".nlsh" / "config.yml"
+                else:
+                    config_path = Path(os.environ["XDG_CONFIG_HOME"]) / "nlsh" / "config.yml"
+            else:
+                config_path = Path.home() / ".nlsh" / "config.yml"
+        
+        # Create directory if it doesn't exist
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write default config
+        with open(config_path, 'w') as f:
+            yaml.dump(Config.DEFAULT_CONFIG, f, default_flow_style=False)
+            
+        print(f"Created default configuration at {config_path}")
+        print("Edit this file to add your API keys or set them as environment variables.")
+        
+        return config_path
