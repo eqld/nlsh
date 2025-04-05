@@ -37,6 +37,12 @@ YAML configuration for backends and shell preferences.
 
 3. Create a configuration file
    ```bash
+   # Option 1: Use the built-in initialization command
+   nlsh --init
+   # or
+   nlgc --init
+   
+   # Option 2: Manually create the directory and copy the example
    mkdir -p ~/.nlsh
    cp examples/config.yml ~/.nlsh/config.yml  # Edit this file with your API keys
    ```
@@ -142,7 +148,20 @@ nlgc
 
 ## Configuration
 
-Create `~/.nlsh/config.yml`:
+### Creating a Configuration File
+
+You have two options to create a configuration file:
+
+1. **Automatic initialization**:
+   ```bash
+   nlsh --init
+   # or
+   nlgc --init
+   ```
+   This will prompt you to choose where to create the config file (if XDG_CONFIG_HOME is set) and create a default configuration file with placeholders for API keys.
+
+2. **Manual creation**:
+   Create `~/.nlsh/config.yml` manually:
 
 ```yaml
 shell: "zsh"  # Override with env $NLSH_SHELL
@@ -174,6 +193,19 @@ nlgc:
 
 *   The `is_reasoning_model` flag is used by `nlsh` to identify models that provide reasoning tokens in their responses. When this flag is set to `true` and verbose mode (`-v`) is enabled, the tool will display the model's reasoning process.
 *   The `nlgc.include_full_files` setting controls whether `nlgc` sends the full content of changed files to the LLM by default. This provides more context but uses more tokens. Use the `--full-files` or `--no-full-files` flags with `nlgc` to override this setting for a single run. If the context becomes too large for the model, `nlgc` will suggest using `--no-full-files`. Note that `nlgc` currently truncates individual files larger than ~100KB before adding them to the prompt to help prevent context overflows.
+
+### Running Without a Configuration File
+
+If you run `nlsh` or `nlgc` without a configuration file, the tools will:
+1. Notify you that no configuration file was found
+2. Use default settings (bash shell, OpenAI backend)
+3. Suggest running with `--init` to create a configuration file
+
+Example:
+```
+Note: No configuration file found at default locations.
+Using default configuration. Run 'nlsh --init' to create a config file.
+```
 
 ### Environment Variable Overrides
 
