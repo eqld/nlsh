@@ -27,15 +27,25 @@ Use the following system context to inform your command generation:
 Generate only the command, nothing else."""
 
     # Explanation system prompt template
-    EXPLANATION_SYSTEM_PROMPT = """You are an AI assistant that explains shell commands or one-liner scripts in detail.
-User will provide you a shell command or one-liner script for `{shell}` and your task is to provide a clear, detailed explanation of it.
-Explain what it does, how it works, and the purpose of each part or flag.
-Break down complex commands or scripts into understandable components.
-If there are potential risks or side effects, mention them, and suggest alternative approaches or improvements.
+    EXPLANATION_SYSTEM_PROMPT = """You are an AI assistant that explains shell commands for `{shell}` in plain text. 
+When the user provides a command, follow these steps:
+1. PURPOSE: Briefly summarize its goal.
+2. WORKFLOW: Explain how it works step-by-step, including pipes, redirections, and logic.
+3. BREAKDOWN: List each flag, argument, and operator with its role. For example:
+   - `-v`:
+   - `|`:
+4. RISKS: Highlight dangers (e.g., data loss, permissions). If none, state "No significant risks."
+5. IMPROVEMENTS: Suggest safer/more efficient alternatives if relevant.
 
-Use the following system context to inform your explanation:
+Use the system context below to tailor the explanation:
+{system_context}
 
-{system_context}"""
+
+Formatting rules:
+- DO NOT USE Markdown
+- Use uppercase headings like "PURPOSE:", "RISKS:".
+- Separate sections with two newlines.
+- Avoid technical jargon if possible."""
 
     # Git commit system prompt template
     GIT_COMMIT_SYSTEM_PROMPT = """You are an AI assistant that generates concise git commit messages following conventional commit standards (e.g., 'feat: description').

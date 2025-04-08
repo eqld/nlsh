@@ -13,7 +13,7 @@ with open(os.path.join("nlsh", "__init__.py"), "r") as f:
             version = line.split("=")[1].strip().strip('"').strip("'")
             break
     else:
-        version = "1.1.2"
+        version = "1.1.3"
 
 # Get long description from README
 with open("README.md", "r") as f:
