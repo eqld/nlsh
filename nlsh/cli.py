@@ -436,6 +436,140 @@ def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, res
         print(f"Error writing to log file: {str(e)}", file=sys.stderr)
 
 
+def _handle_edit_command(command: str) -> tuple[str, bool]:
+    """Handle editing a command.
+    
+    Args:
+        command: Command to edit.
+        
+    Returns:
+        tuple: (edited_command, should_continue)
+    """
+    edited_command = edit_text_in_editor(command, suffix=".sh")
+
+    if edited_command is None:
+        # Edit was cancelled, errored, or resulted in empty command.
+        print("Edit cancelled or failed. Returning to original command confirmation.", file=sys.stderr)
+        return command, True
+    
+    if edited_command == command:
+        print("Command unchanged.", file=sys.stderr)
+        return command, True
+
+    # Confirm execution of the edited command
+    print(f"\nEdited command: {edited_command}")
+    return edited_command, True
+
+
+def _handle_explain_command(config: Config, args: argparse.Namespace, command: str) -> bool:
+    """Handle explaining a command.
+    
+    Args:
+        config: Configuration object.
+        args: Command-line arguments.
+        command: Command to explain.
+        
+    Returns:
+        bool: Whether to continue with confirmation.
+    """
+    try:
+        explanation = asyncio.run(explain_command(
+            config,
+            args.backend,
+            command,
+            verbose=args.verbose,
+            log_file=args.log_file,
+        ))
+        print("\nExplanation:")
+        print("-" * 40)
+        print(explanation)
+        print("-" * 40)
+        return True
+    except Exception as e:
+        print(f"Error generating explanation: {str(e)}", file=sys.stderr)
+        if args.verbose > 1:  # Show stack trace in double verbose mode
+            traceback.print_exc(file=sys.stderr)
+        return True
+
+
+def _process_command_confirmation(config: Config, args: argparse.Namespace, command: str, declined_commands: List[str]) -> tuple[int, bool, dict]:
+    """Process command confirmation and execution.
+    
+    Args:
+        config: Configuration object.
+        args: Command-line arguments.
+        command: Command to confirm and execute.
+        declined_commands: List of declined commands.
+        
+    Returns:
+        tuple: (exit_code, should_continue, fix_info)
+    """
+    fix_info = {
+        "fix_command": False,
+        "failed_command": None,
+        "failed_command_exit_code": None,
+        "failed_command_output": None
+    }
+    
+    while True:
+        # Ask for confirmation
+        confirmation = confirm_execution(command)
+        
+        if confirmation == "regenerate":
+            # Regenerate the command
+            print("Regenerating command...")
+            declined_commands.append(command)
+            return -1, False, fix_info  # Continue outer loop
+        elif confirmation == "edit":
+            command, should_continue = _handle_edit_command(command)
+            if should_continue:
+                continue
+        elif confirmation == "explain":
+            should_continue = _handle_explain_command(config, args, command)
+            if should_continue:
+                continue
+        elif confirmation:
+            print(f"Executing: {command}")
+            # Actually execute the command
+            code, output = execute_command(command)
+            if code == 0:
+                # Command execution finished successfully
+                return 0, True, fix_info
+            
+            # Command execution failed, ask for fixing
+            fix_command = confirm_fix(command, code)
+            if fix_command:
+                fix_info["fix_command"] = True
+                fix_info["failed_command"] = command
+                fix_info["failed_command_output"] = output
+                fix_info["failed_command_exit_code"] = code
+                return -1, False, fix_info  # Continue outer loop
+
+            # Fixing declined, return error code
+            return code, True, fix_info
+        else:
+            print("Command execution cancelled")
+            return 0, True, fix_info
+
+
+def _get_prompt(args: argparse.Namespace, config: Config) -> str:
+    """Get prompt from file or command line.
+    
+    Args:
+        args: Command-line arguments.
+        config: Configuration object.
+        
+    Returns:
+        str: Prompt.
+    """
+    if args.prompt_file:
+        prompt_builder = PromptBuilder(config)
+        return prompt_builder.load_prompt_from_file(args.prompt_file)
+    else:
+        # Join all prompt arguments into a single string
+        return " ".join(args.prompt) if args.prompt else ""
+
+
 def main() -> int:
     """Main entry point.
     
@@ -475,122 +609,54 @@ def main() -> int:
             return 1
 
         # Get prompt from file or command line
-        prompt = ""
-        if args.prompt_file:
-            prompt_builder = PromptBuilder(config)
-            prompt = prompt_builder.load_prompt_from_file(args.prompt_file)
-        else:
-            # Join all prompt arguments into a single string
-            prompt = " ".join(args.prompt) if args.prompt else ""
+        prompt = _get_prompt(args, config)
 
-        fix_command = False
-        failed_command = None
-        failed_command_exit_code = None
-        failed_command_output = None
-
-        # Generate command
+        # Command generation and execution loop
+        fix_info = {
+            "fix_command": False,
+            "failed_command": None,
+            "failed_command_exit_code": None,
+            "failed_command_output": None
+        }
         declined_commands = []
-        # Interactive mode with command regeneration
+        
         while True:
-            if fix_command:
-                # Fix command
-                command = asyncio.run(generate_command_fix(
-                    config,
-                    args.backend,
-                    prompt,
-                    failed_command,
-                    failed_command_exit_code,
-                    failed_command_output,
-                    verbose=args.verbose > 0,
-                    log_file=args.log_file,
-                ))
-            else:
-                # Generate command
-                command = asyncio.run(generate_command(
-                    config,
-                    args.backend,
-                    prompt,
-                    declined_commands=declined_commands,
-                    verbose=args.verbose > 0,
-                    log_file=args.log_file,
-                ))
-
-            # Ask for confirmation only if command generation succeeded
-            while True:
-                # Ask for confirmation
-                confirmation = confirm_execution(command)
-                
-                if confirmation == "regenerate":
-                    # Regenerate the command
-                    print("Regenerating command...")
-                    declined_commands.append(command)
-                    fix_command = False
-                    break  # Break the inner loop to regenerate
-                elif confirmation == "edit":
-                    edited_command = edit_text_in_editor(command, suffix=".sh")
-
-                    if edited_command is None:
-                        # Edit was cancelled, errored, or resulted in empty command.
-                        # Go back to the confirmation prompt for the original command.
-                        print("Edit cancelled or failed. Returning to original command confirmation.", file=sys.stderr)
-                        continue 
-                    
-                    if edited_command == command:
-                        print("Command unchanged.", file=sys.stderr)
-                        # Go back to confirmation prompt for original command
-                        continue
-
-                    # Confirm execution of the edited command
-                    print(f"\nEdited command: {edited_command}")
-                    command = edited_command
-                    # Go back to confirmation prompt for edited command
-                    continue
-                elif confirmation == "explain":
-                    # Generate explanation
-                    try:
-                        explanation = asyncio.run(explain_command(
-                            config,
-                            args.backend,
-                            command,
-                            verbose=args.verbose,
-                            log_file=args.log_file,
-                        ))
-                        print("\nExplanation:")
-                        print("-" * 40)
-                        print(explanation)
-                        print("-" * 40)
-                        # Continue with confirmation after explanation
-                        continue
-                    except Exception as e:
-                        print(f"Error generating explanation: {str(e)}", file=sys.stderr)
-                        if args.verbose > 1:  # Show stack trace in double verbose mode
-                            traceback.print_exc(file=sys.stderr)
-                        # Continue with confirmation despite explanation error
-                        continue
-                elif confirmation:
-                    print(f"Executing: {command}")
-                    # Actually execute the command
-                    code, output = execute_command(command)
-                    if code == 0:
-                        # Command execution finished successfully
-                        return 0
-                    
-                    # Command execution failed, ask for fixing
-                    fix_command = confirm_fix(command, code)
-                    if fix_command:
-                        failed_command = command
-                        failed_command_output = output
-                        failed_command_exit_code = code
-                        break  # Break the inner loop to fix
-
-                    # Fixing declined, return error code
-                    return code
+            try:
+                # Generate or fix command
+                if fix_info["fix_command"]:
+                    command = asyncio.run(generate_command_fix(
+                        config,
+                        args.backend,
+                        prompt,
+                        fix_info["failed_command"],
+                        fix_info["failed_command_exit_code"],
+                        fix_info["failed_command_output"],
+                        verbose=args.verbose > 0,
+                        log_file=args.log_file,
+                    ))
                 else:
-                    print("Command execution cancelled")
-                    return 0
-            
-            # If we're here, we need to regenerate the command
-            continue
+                    command = asyncio.run(generate_command(
+                        config,
+                        args.backend,
+                        prompt,
+                        declined_commands=declined_commands,
+                        verbose=args.verbose > 0,
+                        log_file=args.log_file,
+                    ))
+                
+                # Process command confirmation and execution
+                exit_code, should_exit, fix_info = _process_command_confirmation(
+                    config, args, command, declined_commands
+                )
+                
+                if should_exit:
+                    return exit_code
+                # Otherwise continue the loop
+            except Exception as e:
+                print(f"Error during command generation or execution: {str(e)}", file=sys.stderr)
+                if args.verbose > 1:
+                    traceback.print_exc(file=sys.stderr)
+                return 1
                 
     except ValueError as e:
         print(f"Error: {str(e)}", file=sys.stderr)
