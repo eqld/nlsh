@@ -10,6 +10,7 @@ import datetime
 import json
 import locale
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -331,6 +332,7 @@ def safe_write(stream: TextIO, text: str) -> None:
 def execute_command(command: str) -> tuple[int, str]:
     """Execute a shell command safely."""
     output = ""
+    process = None
 
     try:
         shell = os.environ.get("SHELL", "/bin/sh")
@@ -349,26 +351,46 @@ def execute_command(command: str) -> tuple[int, str]:
             executable=shell,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=1,  # Line buffered
+            bufsize=0,  # Unbuffered
             encoding=system_encoding,
             errors='replace'  # Replace invalid characters
         )
         
-        # Note: Reading line-by-line may not render interactive command output (e.g., progress bars) correctly.
-        while True:
-            stdout_line = process.stdout.readline() if process.stdout else ''
-            stderr_line = process.stderr.readline() if process.stderr else ''
+        # Use select for non-blocking I/O
+        stdout_fd = process.stdout.fileno()
+        stderr_fd = process.stderr.fileno()
+        
+        readable_fds = [stdout_fd, stderr_fd]
+        stdout_data, stderr_data = "", ""
+        
+        while readable_fds:
+            # Use select to wait for data to be available
+            ready_to_read, _, _ = select.select(readable_fds, [], [], 0.1)
             
-            if not stdout_line and not stderr_line and process.poll() is not None:
+            # Process has exited and no more data to read
+            if not ready_to_read and process.poll() is not None:
                 break
                 
-            if stdout_line:
-                safe_write(sys.stdout, stdout_line)
-                output += f"\n{stdout_line}"
-            if stderr_line:
-                safe_write(sys.stderr, stderr_line)
-                output += f"\n{stderr_line}"
+            for fd in ready_to_read:
+                if fd == stdout_fd:
+                    data = process.stdout.read(1024)
+                    if not data:  # EOF
+                        readable_fds.remove(stdout_fd)
+                    else:
+                        safe_write(sys.stdout, data)
+                        stdout_data += data
+                        output += data
+                        
+                elif fd == stderr_fd:
+                    data = process.stderr.read(1024)
+                    if not data:  # EOF
+                        readable_fds.remove(stderr_fd)
+                    else:
+                        safe_write(sys.stderr, data)
+                        stderr_data += data
+                        output += data
         
+        # Wait for process to complete and get exit code
         return process.wait(), output
         
     except KeyboardInterrupt:

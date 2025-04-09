@@ -103,7 +103,7 @@ nlsh -v -2 count lines of code in all javascript files
 # (command output appears here)
 ```
 
-**Note on Command Execution:** `nlsh` executes commands by reading stdout/stderr line by line. This works well for most commands but might not render the output of highly interactive commands (like those with progress bars) perfectly.
+**Note on Command Execution:** `nlsh` executes commands using non-blocking I/O with the `select` module to read from stdout/stderr. This approach ensures compatibility with a wide range of commands, including those with pipes (`|`) and redirections. The non-blocking implementation prevents deadlocks that can occur with piped commands where one process might be waiting for input before producing output. While this works well for most commands, highly interactive commands (like those with progress bars or TUI applications) might not render perfectly.
 
 ### Using `nlgc` for Commit Messages
 
