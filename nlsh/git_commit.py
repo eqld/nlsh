@@ -212,7 +212,7 @@ def read_file_content(file_path: str, git_root: str) -> Optional[str]:
         return None
 
 
-async def generate_commit_message(
+def generate_commit_message(
     config: Config,
     backend_index: Optional[int],
     git_diff: str,
@@ -256,14 +256,15 @@ async def generate_commit_message(
     error_msg = None
 
     try:
-        response_content = await backend.generate_response(
+        # Use asyncio.run to call the async method in a synchronous context
+        response_content = asyncio.run(backend.generate_response(
             user_prompt, 
             system_prompt, 
             verbose=verbose, 
             strip_markdown=True,
             max_tokens=GIT_COMMIT_MESSAGE_MAX_TOKENS, 
             regeneration_count=regeneration_count
-        )
+        ))
 
         log(log_file, backend, system_prompt, user_prompt, response_content)
 
@@ -306,7 +307,7 @@ def confirm_commit(message: str) -> Union[bool, str]:
     if response in ["r", "regenerate"]:
         return "regenerate"
     if response in ["e", "edit"]:
-        return "edit" # We'll handle editing later if needed
+        return "edit"
     
     return response in ["y", "yes"]
 
@@ -327,13 +328,9 @@ def run_git_commit(message: str) -> int:
         return 1
 
 
-async def _async_main(config: Config, args: argparse.Namespace) -> int: # Accept config and args
-    """Asynchronous main logic for nlgc."""
-    # Args and config are now passed directly
-
+def _main(config: Config, args: argparse.Namespace) -> int:
+    """Main logic for nlgc."""
     try:
-        # Config is already loaded and validated by the caller (main)
-
         # Determine whether to include full files
         nlgc_config = config.get_nlgc_config()
         include_full_files = nlgc_config.get("include_full_files", True) # Default to True if missing
@@ -372,7 +369,7 @@ async def _async_main(config: Config, args: argparse.Namespace) -> int: # Accept
         while True:
             try:
                 # Generate commit message - wrapped in try/except for specific errors
-                commit_message = await generate_commit_message(
+                commit_message = generate_commit_message(
                     config,
                     args.backend,
                     git_diff,
@@ -417,8 +414,7 @@ async def _async_main(config: Config, args: argparse.Namespace) -> int: # Accept
             # Catch specific errors from generate_commit_message
             except ContextLengthExceededError as e:
                 print(str(e), file=sys.stderr) # Error message already includes suggestion
-                # Optionally add more context here if needed
-                return 1 # Exit with error code
+                return 1
             except EmptyCommitMessageError as e:
                 print(f"Error: {str(e)}", file=sys.stderr)
                 print("Exiting due to empty message.", file=sys.stderr)
@@ -467,9 +463,8 @@ def main() -> None:
             print("Note: No configuration file found at default locations.", file=sys.stderr)
             print("Using default configuration. Run 'nlgc --init' to create a config file.", file=sys.stderr)
             print()
-        
-        # Pass config and args directly to the async function
-        exit_code = asyncio.run(_async_main(config, args))
+
+        exit_code = _main(config, args)
 
     except (ConfigValidationError, GitCommandError, NlgcError, ValueError) as e:
         # Catch known errors that might occur during config loading or async execution
@@ -505,5 +500,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Call the synchronous wrapper when script is run directly
     main()
