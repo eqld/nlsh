@@ -213,3 +213,25 @@ Command output:
 Please provide a fixed version of this command or a completely different command that accomplishes the original request."""
         
         return user_prompt
+        
+    def build_git_commit_user_prompt(self, git_diff: str, changed_files_content: dict = None) -> str:
+        """Build the user prompt for commit message generation.
+        
+        Args:
+            git_diff: Git diff output.
+            changed_files_content: Dict of file contents.
+            
+        Returns:
+            str: Formatted user prompt for commit message generation.
+        """
+        user_prompt = "Generate a commit message for the following changes:\n\n"
+        user_prompt += "Git Diff:\n```diff\n" + git_diff + "\n```\n\n"
+        
+        # Add file content if available
+        if changed_files_content:
+            user_prompt += "Full content of changed files:\n"
+            for file_path, content in changed_files_content.items():
+                user_prompt += f"--- {file_path} ---\n"
+                user_prompt += content + "\n\n"
+                
+        return user_prompt

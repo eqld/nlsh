@@ -226,37 +226,25 @@ def generate_commit_message(
     Raises:
         ContextLengthExceededError: If the prompt is too long for the model.
         EmptyCommitMessageError: If the model returns an empty message.
-        Exception: For other API or backend errors.
+        NlgcError: For other API or backend errors.
     """
+    # Initialize backend and build prompts
     backend_manager = BackendManager(config)
     backend = backend_manager.get_backend(backend_index)
-
     regeneration_count = len(declined_messages)
-
-    # Build the system prompt using PromptBuilder
+    
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_git_commit_system_prompt(declined_messages)
-    
-    # Build the user prompt with git diff and file content
-    user_prompt = "Generate a commit message for the following changes:\n\n"
-    user_prompt += "Git Diff:\n```diff\n" + git_diff + "\n```\n\n"
-    
-    # Add file content if available
-    if changed_files_content:
-        user_prompt += FILE_CONTENT_HEADER + "\n"
-        for file_path, content in changed_files_content.items():
-            user_prompt += f"--- {file_path} ---\n"
-            user_prompt += content + "\n\n"
+    user_prompt = prompt_builder.build_git_commit_user_prompt(git_diff, changed_files_content)
 
+    # Start spinner if not in verbose mode
     spinner = None
     if not verbose:
         spinner = Spinner("Generating commit message")
         spinner.start()
 
-    error_msg = None
-
     try:
-        # Use asyncio.run to call the async method in a synchronous context
+        # Generate response
         response_content = asyncio.run(backend.generate_response(
             user_prompt, 
             system_prompt, 
@@ -274,26 +262,27 @@ def generate_commit_message(
         return response_content
 
     except openai.BadRequestError as e:
-        # Check if the error is likely due to context length
+        # Handle context length errors specifically
         error_str = str(e).lower()
         if "context_length_exceeded" in error_str or "too large" in error_str or "context length" in error_str:
             error_msg = (
                 "Error: The diff and file contents combined are too large for the selected model's context window.\n"
                 "Try running again with the '--no-full-files' flag."
             )
-            # Raise the custom exception
+            print(error_msg, file=sys.stderr)
             raise ContextLengthExceededError(error_msg) from e
-        else:
-            # Re-raise other BadRequestErrors
-            raise NlgcError(f"LLM API request failed: {str(e)}") from e
+        
+        # Re-raise other BadRequestErrors
+        raise NlgcError(f"LLM API request failed: {str(e)}") from e
     except Exception as e:
-        # Catch other potential exceptions during API call
-        raise NlgcError(f"Error generating commit message: {str(e)}") from e
+        # Re-raise other exceptions
+        if not isinstance(e, (ContextLengthExceededError, EmptyCommitMessageError)):
+            raise NlgcError(f"Error generating commit message: {str(e)}") from e
+        raise
     finally:
+        # Always stop the spinner
         if spinner:
             spinner.stop()
-        if error_msg:
-            print(error_msg, file=sys.stderr)
 
 
 def confirm_commit(message: str) -> Union[bool, str]:
@@ -328,118 +317,134 @@ def run_git_commit(message: str) -> int:
         return 1
 
 
+def _prepare_git_data(args, include_full_files):
+    """Prepare git data for commit message generation.
+    
+    Args:
+        args: Command-line arguments.
+        include_full_files: Whether to include full file contents.
+        
+    Returns:
+        tuple: (git_diff, changed_files_content)
+        
+    Raises:
+        GitCommandError: If a git command fails.
+        RuntimeError: If there are no changes to commit.
+    """
+    git_root = _get_git_root()
+    git_diff = get_git_diff(staged=not args.all)
+    
+    changed_files_content = None
+    if include_full_files:
+        changed_files = get_changed_files(staged=not args.all)
+        if changed_files:
+            print(f"Reading content of {len(changed_files)} changed file(s)...")
+            changed_files_content = {}
+            for file_path in changed_files:
+                content = read_file_content(file_path, git_root)
+                if content is not None:
+                    MAX_FILE_SIZE = 100 * 1024
+                    if len(content) > MAX_FILE_SIZE:
+                        print(f"Warning: File '{file_path}' is large ({len(content)} bytes), truncating for prompt.", file=sys.stderr)
+                        content = content[:MAX_FILE_SIZE] + "\n... [TRUNCATED]"
+                    changed_files_content[file_path] = content
+    
+    return git_diff, changed_files_content
+
+
+def _generate_and_confirm_message(config, args, git_diff, changed_files_content, declined_messages=None):
+    """Generate and confirm a commit message.
+    
+    Args:
+        config: Configuration object.
+        args: Command-line arguments.
+        git_diff: Git diff output.
+        changed_files_content: Dict of file contents.
+        declined_messages: List of previously declined messages.
+        
+    Returns:
+        tuple: (success, exit_code)
+        
+    Raises:
+        Various exceptions from generate_commit_message.
+    """
+    if declined_messages is None:
+        declined_messages = []
+        
+    commit_message = generate_commit_message(
+        config,
+        args.backend,
+        git_diff,
+        changed_files_content,
+        declined_messages=declined_messages,
+        verbose=args.verbose > 0,
+        log_file=args.log_file,
+    )
+
+    confirmation = confirm_commit(commit_message)
+
+    if confirmation == "regenerate":
+        print("Regenerating commit message...")
+        declined_messages.append(commit_message)
+        return False, 0  # Continue loop
+    elif confirmation == "edit":
+        edited_message = edit_text_in_editor(commit_message, suffix=".txt")
+
+        if edited_message is None:
+            print("Edit cancelled or failed. Aborting commit.", file=sys.stderr)
+            return True, 1  # Exit with error
+
+        print("\nUsing edited message:")
+        print("-" * 20)
+        print(edited_message)
+        print("-" * 20)
+        if input("Commit with this message? (y/N) ").strip().lower() == 'y':
+            return True, run_git_commit(edited_message)
+        else:
+            print("Commit cancelled.")
+            return True, 0
+    elif confirmation:
+        return True, run_git_commit(commit_message)
+    else:
+        print("Commit cancelled.")
+        return True, 0
+
+
 def _main(config: Config, args: argparse.Namespace) -> int:
     """Main logic for nlgc."""
+    # Determine whether to include full files
+    nlgc_config = config.get_nlgc_config()
+    include_full_files = nlgc_config.get("include_full_files", True)
+    if args.full_files is not None:
+        include_full_files = args.full_files
+
+    # Get git data
     try:
-        # Determine whether to include full files
-        nlgc_config = config.get_nlgc_config()
-        include_full_files = nlgc_config.get("include_full_files", True) # Default to True if missing
-        if args.full_files is not None: # CLI flag overrides config
-            include_full_files = args.full_files
-
-        # Get git diff, root, and file contents
-        try:
-            git_root = _get_git_root() # Get repo root first
-            git_diff = get_git_diff(staged=not args.all) # Use --all flag correctly
-
-            changed_files_content = None
-            if include_full_files:
-                changed_files = get_changed_files(staged=not args.all)
-                if changed_files:
-                    print(f"Reading content of {len(changed_files)} changed file(s)...")
-                    changed_files_content = {}
-                    for file_path in changed_files:
-                        # Pass git_root to read_file_content
-                        content = read_file_content(file_path, git_root)
-                        if content is not None:
-                            # Limit file size to avoid excessively large prompts (e.g., 100KB)
-                            MAX_FILE_SIZE = 100 * 1024
-                            if len(content) > MAX_FILE_SIZE:
-                                print(f"Warning: File '{file_path}' is large ({len(content)} bytes), truncating for prompt.", file=sys.stderr)
-                                content = content[:MAX_FILE_SIZE] + "\n... [TRUNCATED]"
-                            changed_files_content[file_path] = content
-        except GitCommandError as e: # Catch specific Git error
-            print(f"Error: {str(e)}", file=sys.stderr)
-            return 1
-        except RuntimeError as e: # Catch other runtime errors during file reading/diff
-            print(f"Error preparing Git data: {str(e)}", file=sys.stderr)
-            return 1
-
-        declined_messages = []
-        while True:
-            try:
-                # Generate commit message - wrapped in try/except for specific errors
-                commit_message = generate_commit_message(
-                    config,
-                    args.backend,
-                    git_diff,
-                    changed_files_content,
-                    declined_messages=declined_messages,
-                    verbose=args.verbose > 0,
-                    log_file=args.log_file,
-                )
-
-                # Confirmation logic remains the same, but error checks above are removed
-                confirmation = confirm_commit(commit_message)
-
-                if confirmation == "regenerate":
-                    print("Regenerating commit message...")
-                    declined_messages.append(commit_message)
-                    continue
-                elif confirmation == "edit":
-                    # Use the shared editor function
-                    edited_message = edit_text_in_editor(commit_message, suffix=".txt")
-
-                    if edited_message is None:
-                        # Edit was cancelled, errored, or resulted in empty message.
-                        print("Edit cancelled or failed. Aborting commit.", file=sys.stderr)
-                        return 1 # Exit with error as commit cannot proceed
-
-                    # Confirm commit with the edited message
-                    print("\nUsing edited message:")
-                    print("-" * 20)
-                    print(edited_message)
-                    print("-" * 20)
-                    if input("Commit with this message? (y/N) ").strip().lower() == 'y':
-                        return run_git_commit(edited_message)
-                    else:
-                        print("Commit cancelled.")
-                        return 0
-                elif confirmation:
-                    return run_git_commit(commit_message)
-                else:
-                    print("Commit cancelled.")
-                    return 0
-
-            # Catch specific errors from generate_commit_message
-            except ContextLengthExceededError as e:
-                print(str(e), file=sys.stderr) # Error message already includes suggestion
-                return 1
-            except EmptyCommitMessageError as e:
-                print(f"Error: {str(e)}", file=sys.stderr)
-                print("Exiting due to empty message.", file=sys.stderr)
-                return 1
-            except NlgcError as e: # Catch other nlgc-related errors (includes API errors)
-                print(f"Error: {str(e)}", file=sys.stderr)
-                if args.verbose > 1: traceback.print_exc(file=sys.stderr)
-                return 1
-            except ValueError as e: # Catch config/backend validation errors if they slip through
-                print(f"Configuration or Backend Error: {str(e)}", file=sys.stderr)
-                if args.verbose > 1: traceback.print_exc(file=sys.stderr)
-                return 1
-            except Exception as e: # Catch unexpected errors during the loop
-                print(f"An unexpected error occurred during commit generation: {str(e)}", file=sys.stderr)
-                if args.verbose > 1: traceback.print_exc(file=sys.stderr)
-                return 1
-
-    except KeyboardInterrupt:
-        print("\nOperation cancelled by user", file=sys.stderr)
-        return 130
-    except Exception as e:
-        print(f"Fatal error: {str(e)}", file=sys.stderr)
-        if getattr(args, 'verbose', 0) > 1: # Check if args exists before accessing
-            traceback.print_exc(file=sys.stderr)
+        git_diff, changed_files_content = _prepare_git_data(args, include_full_files)
+    except (GitCommandError, RuntimeError) as e:
+        print(f"Error: {str(e)}", file=sys.stderr)
         return 1
+
+    # Generate and confirm commit message
+    declined_messages = []
+    while True:
+        try:
+            done, exit_code = _generate_and_confirm_message(
+                config, args, git_diff, changed_files_content, declined_messages
+            )
+            if done:
+                return exit_code
+        except (ContextLengthExceededError, EmptyCommitMessageError, NlgcError, ValueError) as e:
+            print(f"Error: {str(e)}", file=sys.stderr)
+            if args.verbose > 1 and not isinstance(e, ContextLengthExceededError):
+                traceback.print_exc(file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"An unexpected error occurred: {str(e)}", file=sys.stderr)
+            if args.verbose > 1:
+                traceback.print_exc(file=sys.stderr)
+            return 1
+
 
 
 def main() -> None:
@@ -469,34 +474,28 @@ def main() -> None:
     except (ConfigValidationError, GitCommandError, NlgcError, ValueError) as e:
         # Catch known errors that might occur during config loading or async execution
         print(f"Error: {str(e)}", file=sys.stderr)
-        # Check if verbose debugging is requested via args, even if config failed
-        verbose_level = 0
-        for _, arg in enumerate(sys.argv):
-            if arg == '-v': verbose_level += 1
-            if arg == '--verbose': verbose_level += 1
-            if arg.startswith('-v') and not arg.startswith('--'):
-                verbose_level += len(arg) -1 # handles -vv, -vvv etc.
-
-        if verbose_level > 1:
-            traceback.print_exc(file=sys.stderr)
+        if _get_verbose_level() > 1: traceback.print_exc(file=sys.stderr)
         exit_code = 1
     except KeyboardInterrupt:
         print("\nOperation cancelled by user", file=sys.stderr)
         exit_code = 130
     except Exception as e:
         print(f"Fatal error: {str(e)}", file=sys.stderr)
-        # Check verbose level again for unexpected errors
-        verbose_level = 0
-        for i, arg in enumerate(sys.argv):
-            if arg == '-v': verbose_level += 1
-            if arg == '--verbose': verbose_level += 1
-            if arg.startswith('-v') and not arg.startswith('--'):
-                verbose_level += len(arg) -1
-        if verbose_level > 1:
-            traceback.print_exc(file=sys.stderr)
+        if _get_verbose_level() > 1: traceback.print_exc(file=sys.stderr)
         exit_code = 1
     finally:
         sys.exit(exit_code)
+
+
+def _get_verbose_level() -> int:
+    verbose_level = 0
+    for _, arg in enumerate(sys.argv):
+        if arg == '-v': verbose_level += 1
+        if arg == '--verbose': verbose_level += 1
+        if arg.startswith('-v') and not arg.startswith('--'):
+            verbose_level += len(arg) -1
+    
+    return verbose_level
 
 
 if __name__ == "__main__":
