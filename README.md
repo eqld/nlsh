@@ -266,6 +266,38 @@ nlsh -i find large files
 
 This tells the model not to suggest the same command again and to try a different approach. To encourage more diverse suggestions with each regeneration attempt, the temperature parameter (which controls randomness) is automatically increased by 0.1 for each regeneration, starting from 0.2 and capping at 1.0. This applies to both `nlsh` command generation and `nlgc` commit message generation.
 
+### Command Fixing
+
+You can have `nlsh` automatically fix failed commands by responding with 'y' when prompted after a command fails:
+
+```bash
+nlsh find files modified today
+# Example output:
+# Suggested: find . -mtime 0
+# [Confirm] Run this command? (y/N/e/r/x) y
+# Executing:
+# find: unknown option -- m
+# find: `find .mtime' is not a valid expression
+# 
+# ----------------
+# Command execution failed with code 1
+# Failed command: find . -mtime 0
+# Try to fix? If you confirm, the command output and exit code will be sent to LLM.
+# [Confirm] Try to fix this command? (y/N) y
+# Fixing...
+# Suggested: find . -type f -mtime 0
+# [Confirm] Run this command? (y/N/e/r/x) y
+# Executing:
+# (command output appears here)
+```
+
+This feature helps you quickly recover from command errors by:
+1. Analyzing the error output and exit code of the failed command
+2. Considering your original intent (the natural language prompt)
+3. Generating a corrected version of the command or an alternative approach
+
+The LLM receives the original prompt, the failed command, its exit code, and output, allowing it to understand what went wrong and how to fix it. This is especially useful for syntax errors, missing flags, or incorrect parameter formats.
+
 ### System Context Tools
 
 `nlsh` uses a set of system tools to gather context information about your environment. This context is included in the prompt sent to the LLM, enabling it to generate more accurate and relevant shell commands tailored to your specific system.

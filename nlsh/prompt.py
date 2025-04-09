@@ -26,6 +26,19 @@ Use the following system context to inform your command generation:
 
 Generate only the command, nothing else."""
 
+    # Fixing system prompt template
+    FIXING_SYSTEM_PROMPT = """You are an AI assistant that fixes failed shell commands.
+Your task is to analyze a failed command and generate a fixed version that will work correctly.
+Only generate commands for the `{shell}` shell.
+Do not include explanations or descriptions.
+Ensure the commands are safe and do not cause data loss or security issues.
+Use the following system context to inform your command generation:
+
+{system_context}
+
+Generate only the fixed command, nothing else. If the original command is completely wrong or cannot be fixed, 
+generate a new command that accomplishes the original intent."""
+
     # Explanation system prompt template
     EXPLANATION_SYSTEM_PROMPT = """You are an AI assistant that explains shell commands for `{shell}` in plain text. 
 When the user provides a command, follow these steps:
@@ -135,20 +148,7 @@ Output only the commit message (subject and optional body). Do not include expla
         return self.GIT_COMMIT_SYSTEM_PROMPT.format(
             declined_messages=declined_messages_str
         )
-    
-    def build_user_prompt(self, user_input: str) -> str:
-        """Build the user prompt.
-        
-        Args:
-            user_input: User input string.
-            
-        Returns:
-            str: Formatted user prompt.
-        """
-        # For now, just return the user input as is
-        # In the future, we could add more processing here
-        return user_input
-    
+
     def load_prompt_from_file(self, file_path: str) -> str:
         """Load a prompt from a file.
         
@@ -163,3 +163,53 @@ Output only the commit message (subject and optional body). Do not include expla
                 return f.read().strip()
         except Exception as e:
             return f"Error loading prompt file: {str(e)}"
+            
+    def build_fixing_system_prompt(self, tools: List[BaseTool]) -> str:
+        """Build the system prompt for fixing failed commands with context from tools.
+        
+        Args:
+            tools: List of tool instances.
+            
+        Returns:
+            str: Formatted system prompt for command fixing.
+        """
+        system_context = self._gather_tools_context(tools)
+        
+        # Format the fixing prompt with shell and system context
+        return self.FIXING_SYSTEM_PROMPT.format(
+            shell=self.shell,
+            system_context=system_context
+        )
+    
+    def build_fixing_user_prompt(
+        self,
+        prompt: str,
+        failed_command: str,
+        failed_command_exit_code: int,
+        failed_command_output: str
+    ) -> str:
+        """Build the user prompt for fixing failed commands.
+        
+        Args:
+            prompt: Original user prompt for command generation.
+            failed_command: The command that failed.
+            failed_command_exit_code: Exit code of the failed command.
+            failed_command_output: Output of the failed command.
+            
+        Returns:
+            str: Formatted user prompt for command fixing.
+        """
+        user_prompt = f"""I need to fix a failed command.
+
+Original request (purpose of the command): {prompt}
+
+The failed command: {failed_command}
+
+Exit code: {failed_command_exit_code}
+
+Command output:
+{failed_command_output}
+
+Please provide a fixed version of this command or a completely different command that accomplishes the original request."""
+        
+        return user_prompt
