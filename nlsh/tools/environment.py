@@ -21,6 +21,10 @@ class EnvInspector(BaseTool):
         r'.*KEY.*',
         r'.*CREDENTIAL.*',
         r'.*AUTH.*',
+        r'.*ACCOUNT.*',
+        r'.*NAME.*',
+        r'.*EMAIL.*',
+        r'.*ID.*',
     ]
     
     # List of important environment variables to always include
