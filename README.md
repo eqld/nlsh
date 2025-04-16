@@ -66,6 +66,10 @@ pip install neural-shell
 
 See: https://pypi.org/project/neural-shell/.
 
+PyPI project statistics:
+* https://pypistats.org/packages/neural-shell
+* https://pepy.tech/projects/neural-shell
+
 ## Usage
 
 Basic usage:
