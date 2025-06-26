@@ -22,8 +22,6 @@ Use the following system context to inform your command generation:
 
 {system_context}
 
-{declined_commands}
-
 Generate only the command, nothing else."""
 
     # Fixing system prompt template
@@ -77,6 +75,19 @@ Do not generate shell commands. Do not include explanations unless specifically 
 Focus on the task and provide a clean, direct output that can be used in pipelines.
 
 Process the input content according to the user's instructions and output the result."""
+
+    # Regeneration system prompt template
+    REGENERATION_SYSTEM_PROMPT = """You are an AI assistant that regenerates shell commands based on user feedback.
+The user has rejected previous command suggestions and may have provided specific guidance.
+Your task is to generate a different shell command that accomplishes the user's original request.
+Only generate commands for the `{shell}` shell.
+Do not include explanations or descriptions.
+Ensure the commands are safe and do not cause data loss or security issues.
+
+Use the following system context to inform your command generation:
+{system_context}
+
+Generate only the command, nothing else."""
     
     def __init__(self, config):
         """Initialize the prompt builder.
@@ -119,27 +130,21 @@ Process the input content according to the user's instructions and output the re
             system_context=system_context
         )
 
-    def build_system_prompt(self, tools: List[BaseTool], declined_commands: List[str] = []) -> str:
+    def build_system_prompt(self, tools: List[BaseTool]) -> str:
         """Build the system prompt with context from tools.
         
         Args:
             tools: List of tool instances.
-            declined_commands: List of declined commands.
             
         Returns:
             str: Formatted system prompt.
         """
         system_context = self._gather_tools_context(tools)
         
-        declined_commands_str = ""
-        if declined_commands:
-            declined_commands_str = "Do not generate these commands:\n" + "\n".join(declined_commands)
-
         # Format the base prompt with shell and system context
         return self.BASE_SYSTEM_PROMPT.format(
             shell=self.shell,
             system_context=system_context,
-            declined_commands=declined_commands_str
         )
     
     def build_git_commit_system_prompt(self, declined_messages: List[str] = []) -> str:
@@ -268,3 +273,49 @@ Please provide a fixed version of this command or a completely different command
 
 Input content:
 {stdin_content}"""
+
+    def build_regeneration_system_prompt(self, tools: List[BaseTool]) -> str:
+        """Build the system prompt for command regeneration with context from tools.
+        
+        Args:
+            tools: List of tool instances.
+            
+        Returns:
+            str: Formatted system prompt for command regeneration.
+        """
+        system_context = self._gather_tools_context(tools)
+        
+        # Format the regeneration prompt with shell and system context
+        return self.REGENERATION_SYSTEM_PROMPT.format(
+            shell=self.shell,
+            system_context=system_context
+        )
+
+    def build_regeneration_user_prompt(self, original_request: str, declined_commands: List[dict]) -> str:
+        """Build user prompt for command regeneration with notes.
+        
+        Args:
+            original_request: The original user request for command generation.
+            declined_commands: List of declined commands with optional notes.
+                              Each item should be a dict with 'command' and optional 'note' keys.
+            
+        Returns:
+            str: Formatted user prompt for command regeneration.
+        """
+        prompt = f"Original request: {original_request}\n\n"
+        
+        if declined_commands:
+            prompt += "Previously rejected commands:\n"
+            for i, declined in enumerate(declined_commands, 1):
+                prompt += f"{i}. `{declined['command']}`"
+                if declined.get('note'):
+                    prompt += f" (Reason: {declined['note']})"
+                prompt += "\n"
+            
+            prompt += "\nPlease generate a different command that accomplishes the original request."
+            if any(d.get('note') for d in declined_commands):
+                prompt += " Take the provided feedback into account."
+        else:
+            prompt += "Please generate a command that accomplishes this request."
+        
+        return prompt

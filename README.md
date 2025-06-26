@@ -109,6 +109,8 @@ nlsh -v -2 count lines of code in all javascript files
 # (command output appears here)
 ```
 
+**Note on Command Execution:** `nlsh` executes commands using non-blocking I/O with the `select` module to read from stdout/stderr. This approach ensures compatibility with a wide range of commands, including those with pipes (`|`) and redirections. The non-blocking implementation prevents deadlocks that can occur with piped commands where one process might be waiting for input before producing output. While this works well for most commands, highly interactive commands (like those with progress bars or TUI applications) might not render perfectly.
+
 ### STDIN Processing Mode
 
 `nlsh` can also process input from STDIN and output results directly to STDOUT, making it perfect for use in pipelines:
@@ -138,8 +140,6 @@ In STDIN processing mode:
 - Output goes directly to STDOUT for easy piping
 - The LLM processes the input content according to your instructions
 - Perfect for automation and scripting workflows
-
-**Note on Command Execution:** `nlsh` executes commands using non-blocking I/O with the `select` module to read from stdout/stderr. This approach ensures compatibility with a wide range of commands, including those with pipes (`|`) and redirections. The non-blocking implementation prevents deadlocks that can occur with piped commands where one process might be waiting for input before producing output. While this works well for most commands, highly interactive commands (like those with progress bars or TUI applications) might not render perfectly.
 
 ### Using `nlgc` for Commit Messages
 
@@ -294,13 +294,22 @@ nlsh -i find large files
 # Example output:
 # Suggested: find . -type f -size +100M
 # [Confirm] Run this command? (y/N/e/r/x) r
+# Note for regeneration (optional): Use 'du' instead
 # Regenerating command...
 # Suggested: du -h -d 1 | sort -hr
 # [Confirm] Run this command? (y/N/e/r/x) y
 # (command output appears here)
 ```
 
-This tells the model not to suggest the same command again and to try a different approach. To encourage more diverse suggestions with each regeneration attempt, the temperature parameter (which controls randomness) is automatically increased by 0.1 for each regeneration, starting from 0.2 and capping at 1.0. This applies to both `nlsh` command generation and `nlgc` commit message generation.
+When you choose to regenerate a command, you can optionally provide a note explaining why you rejected the previous command or what approach you'd prefer. This note helps the AI understand your requirements better and generate more suitable alternatives.
+
+**How it works:**
+- The system uses a special regeneration prompt that includes your original request
+- All previously rejected commands are listed with their rejection reasons (if provided)
+- The AI receives specific guidance about what didn't work and what you're looking for
+- Empty notes work exactly like the previous system - just press Enter to skip
+
+To encourage more diverse suggestions with each regeneration attempt, the temperature parameter (which controls randomness) is automatically increased by 0.1 for each regeneration, starting from 0.2 and capping at 1.0. This applies to both `nlsh` command generation and `nlgc` commit message generation.
 
 ### Command Fixing
 
