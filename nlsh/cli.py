@@ -119,7 +119,6 @@ async def generate_command(
     config: Config, 
     backend_index: Optional[int], 
     prompt: str,
-    declined_commands: List[str] = [],
     verbose: bool = False, 
     log_file: Optional[str] = None,
 ) -> str:
@@ -129,7 +128,6 @@ async def generate_command(
         config: Configuration object.
         backend_index: Backend index to use.
         prompt: User prompt.
-        declined_commands: List of declined commands.
         verbose: Whether to print reasoning tokens to stderr.
         log_file: Optional path to log file.
         
@@ -147,8 +145,7 @@ async def generate_command(
     
     # Build prompt
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_system_prompt(tools, declined_commands)
-    regeneration_count = len(declined_commands)
+    system_prompt = prompt_builder.build_system_prompt(tools)
     
     # Get backend
     backend = backend_manager.get_backend(backend_index)
@@ -161,8 +158,62 @@ async def generate_command(
     
     try:
         # Generate command
-        response = await backend.generate_response(prompt, system_prompt, verbose=verbose, regeneration_count=regeneration_count)
+        response = await backend.generate_response(prompt, system_prompt, verbose=verbose, regeneration_count=0)
         log(log_file, backend, system_prompt, prompt, response)
+        return response
+    finally:
+        if spinner: spinner.stop()
+
+
+async def generate_command_regeneration(
+    config: Config,
+    backend_index: Optional[int],
+    original_request: str,
+    declined_commands: List[dict],
+    verbose: bool = False,
+    log_file: Optional[str] = None,
+) -> str:
+    """Generate a regenerated command using the specified backend.
+    
+    Args:
+        config: Configuration object.
+        backend_index: Backend index to use.
+        original_request: Original user request.
+        declined_commands: List of declined commands with optional notes.
+        verbose: Whether to print reasoning tokens to stderr.
+        log_file: Optional path to log file.
+        
+    Returns:
+        str: Generated shell command.
+        
+    Raises:
+        Exception: If command generation fails.
+    """
+    # Get backend manager
+    backend_manager = BackendManager(config)
+    
+    # Get tools
+    tools = get_tools(config=config)
+    
+    # Build prompt
+    prompt_builder = PromptBuilder(config)
+    system_prompt = prompt_builder.build_regeneration_system_prompt(tools)
+    user_prompt = prompt_builder.build_regeneration_user_prompt(original_request, declined_commands)
+    regeneration_count = len(declined_commands)
+    
+    # Get backend
+    backend = backend_manager.get_backend(backend_index)
+    
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner("Regenerating")
+        spinner.start()
+    
+    try:
+        # Generate command
+        response = await backend.generate_response(user_prompt, system_prompt, verbose=verbose, regeneration_count=regeneration_count)
+        log(log_file, backend, system_prompt, user_prompt, response)
         return response
     finally:
         if spinner: spinner.stop()
@@ -336,21 +387,23 @@ async def explain_command(
         if spinner: spinner.stop()
 
 
-def confirm_execution(command: str) -> Union[bool, str]:
+def confirm_execution(command: str) -> Union[bool, str, tuple]:
     """Ask for confirmation before executing a command.
     
     Args:
         command: Command to execute.
         
     Returns:
-        Union[bool, str]: True if confirmed, False if declined, "regenerate" if regeneration requested,
-                        "explain" if explanation requested, "edit" if editing requested.
+        Union[bool, str, tuple]: True if confirmed, False if declined, "regenerate" if regeneration requested,
+                               "explain" if explanation requested, "edit" if editing requested.
+                               For regeneration, returns tuple ("regenerate", note) where note can be None.
     """
     print(f"Suggested: {command}")
     response = input("[Confirm] Run this command? (y/N/e/r/x) ").strip().lower()
     
     if response in ["r", "regenerate"]:
-        return "regenerate"
+        note = input("Note for regeneration (optional): ").strip()
+        return ("regenerate", note if note else None)
     elif response in ["e", "edit"]:
         return "edit"
     elif response in ["x", "explain"]:
@@ -563,14 +616,14 @@ def _handle_explain_command(config: Config, args: argparse.Namespace, command: s
         return True
 
 
-def _process_command_confirmation(config: Config, args: argparse.Namespace, command: str, declined_commands: List[str]) -> tuple[int, bool, dict]:
+def _process_command_confirmation(config: Config, args: argparse.Namespace, command: str, declined_commands: List[dict]) -> tuple[int, bool, dict]:
     """Process command confirmation and execution.
     
     Args:
         config: Configuration object.
         args: Command-line arguments.
         command: Command to confirm and execute.
-        declined_commands: List of declined commands.
+        declined_commands: List of declined commands with optional notes.
         
     Returns:
         tuple: (exit_code, should_continue, fix_info)
@@ -579,17 +632,19 @@ def _process_command_confirmation(config: Config, args: argparse.Namespace, comm
         "fix_command": False,
         "failed_command": None,
         "failed_command_exit_code": None,
-        "failed_command_output": None
+        "failed_command_output": None,
+        "regenerate": False,
     }
     
     while True:
         # Ask for confirmation
         confirmation = confirm_execution(command)
         
-        if confirmation == "regenerate":
-            # Regenerate the command
-            print("Regenerating command...")
-            declined_commands.append(command)
+        if isinstance(confirmation, tuple) and confirmation[0] == "regenerate":
+            # Regenerate the command with optional note
+            _, note = confirmation
+            declined_commands.append({"command": command, "note": note})
+            fix_info["regenerate"] = True
             return -1, False, fix_info  # Continue outer loop
         elif confirmation == "edit":
             command, should_continue = _handle_edit_command(command)
@@ -721,13 +776,14 @@ def main() -> int:
             "fix_command": False,
             "failed_command": None,
             "failed_command_exit_code": None,
-            "failed_command_output": None
+            "failed_command_output": None,
+            "regenerate": False,
         }
         declined_commands = []
         
         while True:
             try:
-                # Generate or fix command
+                # Generate, fix, or regenerate command
                 if fix_info["fix_command"]:
                     command = asyncio.run(generate_command_fix(
                         config,
@@ -739,12 +795,22 @@ def main() -> int:
                         verbose=args.verbose > 0,
                         log_file=args.log_file,
                     ))
+                elif fix_info["regenerate"] or declined_commands:
+                    # Use regeneration logic if we have declined commands or explicit regeneration request
+                    command = asyncio.run(generate_command_regeneration(
+                        config,
+                        args.backend,
+                        prompt,
+                        declined_commands,
+                        verbose=args.verbose > 0,
+                        log_file=args.log_file,
+                    ))
                 else:
+                    # Initial command generation
                     command = asyncio.run(generate_command(
                         config,
                         args.backend,
                         prompt,
-                        declined_commands=declined_commands,
                         verbose=args.verbose > 0,
                         log_file=args.log_file,
                     ))
@@ -756,6 +822,10 @@ def main() -> int:
                 
                 if should_exit:
                     return exit_code
+                
+                # Reset regenerate flag after processing
+                if fix_info.get("regenerate"):
+                    fix_info["regenerate"] = False
                 # Otherwise continue the loop
             except Exception as e:
                 print(f"Error during command generation or execution: {str(e)}", file=sys.stderr)
