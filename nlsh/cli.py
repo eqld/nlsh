@@ -27,6 +27,21 @@ from nlsh.spinner import Spinner
 from nlsh.editor import edit_text_in_editor
 
 
+def _check_stdin_input() -> Optional[str]:
+    """Check if there's input from STDIN and read it.
+    
+    Returns:
+        str: STDIN content if available, None otherwise.
+    """
+    if not sys.stdin.isatty():
+        try:
+            return sys.stdin.read().strip()
+        except Exception as e:
+            print(f"Error reading from STDIN: {e}", file=sys.stderr)
+            return None
+    return None
+
+
 def parse_args(args: List[str]) -> argparse.Namespace:
     """Parse command-line arguments.
     
@@ -210,6 +225,62 @@ async def generate_command_fix(
         # Generate command
         response = await backend.generate_response(user_prompt, system_prompt, verbose=verbose)
         log(log_file, backend, system_prompt, user_prompt, response)
+        return response
+    finally:
+        if spinner: spinner.stop()
+
+
+async def process_stdin_input(
+    config: Config,
+    backend_index: Optional[int],
+    stdin_content: str,
+    user_prompt: str,
+    verbose: bool = False,
+    log_file: Optional[str] = None,
+) -> str:
+    """Process STDIN input using the specified backend.
+    
+    Args:
+        config: Configuration object.
+        backend_index: Backend index to use.
+        stdin_content: Content read from STDIN.
+        user_prompt: User's instruction for processing the content.
+        verbose: Whether to print reasoning tokens to stderr.
+        log_file: Optional path to log file.
+        
+    Returns:
+        str: Processed result.
+        
+    Raises:
+        Exception: If processing fails.
+    """
+    # Get backend manager
+    backend_manager = BackendManager(config)
+    
+    # Build prompt (no system tools needed for STDIN processing)
+    prompt_builder = PromptBuilder(config)
+    system_prompt = prompt_builder.build_stdin_processing_system_prompt()
+    user_prompt_formatted = prompt_builder.build_stdin_processing_user_prompt(stdin_content, user_prompt)
+    
+    # Get backend
+    backend = backend_manager.get_backend(backend_index)
+    
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner("Processing")
+        spinner.start()
+    
+    try:
+        # Process input
+        response = await backend.generate_response(
+            user_prompt_formatted, 
+            system_prompt, 
+            verbose=verbose, 
+            strip_markdown=False,  # Don't strip markdown for text processing
+            max_tokens=2000  # Allow longer responses for text processing
+        )
+        log(log_file, backend, system_prompt, user_prompt_formatted, response)
         return response
     finally:
         if spinner: spinner.stop()
@@ -603,6 +674,40 @@ def main() -> int:
             print("Using default configuration. Run 'nlsh --init' to create a config file.", file=sys.stderr)
             print()
 
+        # Check for STDIN input first
+        stdin_content = _check_stdin_input()
+        
+        if stdin_content:
+            # STDIN processing mode
+            if not args.prompt and not args.prompt_file:
+                print("Error: No prompt provided for STDIN processing")
+                return 1
+            
+            # Get prompt from file or command line
+            prompt = _get_prompt(args, config)
+            
+            try:
+                # Process STDIN input
+                result = asyncio.run(process_stdin_input(
+                    config,
+                    args.backend,
+                    stdin_content,
+                    prompt,
+                    verbose=args.verbose > 0,
+                    log_file=args.log_file,
+                ))
+                
+                # Output result to STDOUT
+                print(result)
+                return 0
+                
+            except Exception as e:
+                print(f"Error processing STDIN input: {str(e)}", file=sys.stderr)
+                if args.verbose > 1:
+                    traceback.print_exc(file=sys.stderr)
+                return 1
+        
+        # Normal command generation mode
         # Check if we have a prompt
         if not args.prompt and not args.prompt_file:
             print("Error: No prompt provided")

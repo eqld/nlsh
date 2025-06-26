@@ -67,6 +67,16 @@ Output only the commit message (subject and optional body). Do not include expla
 
 {declined_messages}
 """
+
+    # STDIN processing system prompt template
+    STDIN_PROCESSING_SYSTEM_PROMPT = """You are an AI assistant that processes text input according to user instructions.
+You will receive text content from STDIN and a user instruction about what to do with that content.
+Your task is to process the input content according to the user's request and output the result directly.
+
+Do not generate shell commands. Do not include explanations unless specifically requested.
+Focus on the task and provide a clean, direct output that can be used in pipelines.
+
+Process the input content according to the user's instructions and output the result."""
     
     def __init__(self, config):
         """Initialize the prompt builder.
@@ -235,3 +245,26 @@ Please provide a fixed version of this command or a completely different command
                 user_prompt += content + "\n\n"
                 
         return user_prompt
+
+    def build_stdin_processing_system_prompt(self) -> str:
+        """Build the system prompt for STDIN processing (no system context needed).
+        
+        Returns:
+            str: Formatted system prompt for STDIN processing.
+        """
+        return self.STDIN_PROCESSING_SYSTEM_PROMPT
+
+    def build_stdin_processing_user_prompt(self, stdin_content: str, user_prompt: str) -> str:
+        """Build the user prompt for STDIN processing.
+        
+        Args:
+            stdin_content: Content read from STDIN.
+            user_prompt: User's instruction for processing the content.
+            
+        Returns:
+            str: Formatted user prompt for STDIN processing.
+        """
+        return f"""Task: {user_prompt}
+
+Input content:
+{stdin_content}"""
