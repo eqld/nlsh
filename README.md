@@ -72,7 +72,9 @@ PyPI project statistics:
 
 ## Usage
 
-Basic usage:
+### Command Generation Mode
+
+Basic usage for generating shell commands:
 ```bash
 nlsh -1 find all pdfs modified in the last 2 days and compress them
 # Example output:
@@ -106,6 +108,36 @@ nlsh -v -2 count lines of code in all javascript files
 # Executing:
 # (command output appears here)
 ```
+
+### STDIN Processing Mode
+
+`nlsh` can also process input from STDIN and output results directly to STDOUT, making it perfect for use in pipelines:
+
+```bash
+# Summarize content from a file
+cat document.md | nlsh summarize this in 3 bullet points > summary.txt
+
+# Extract specific information from logs
+cat server.log | nlsh find all error messages and list them with timestamps
+
+# Process JSON data
+curl -s https://api.example.com/data | nlsh extract all email addresses from this JSON
+
+# Transform text content
+echo "hello world" | nlsh convert to uppercase and add exclamation marks
+
+# Analyze code files
+cat script.py | nlsh explain what this Python script does and identify any potential issues
+
+# Process CSV data
+cat data.csv | nlsh find the top 5 entries by sales amount and format as a table
+```
+
+In STDIN processing mode:
+- No command confirmation is required
+- Output goes directly to STDOUT for easy piping
+- The LLM processes the input content according to your instructions
+- Perfect for automation and scripting workflows
 
 **Note on Command Execution:** `nlsh` executes commands using non-blocking I/O with the `select` module to read from stdout/stderr. This approach ensures compatibility with a wide range of commands, including those with pipes (`|`) and redirections. The non-blocking implementation prevents deadlocks that can occur with piped commands where one process might be waiting for input before producing output. While this works well for most commands, highly interactive commands (like those with progress bars or TUI applications) might not render perfectly.
 
