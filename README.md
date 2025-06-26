@@ -1,5 +1,7 @@
 # Neural Shell (`nlsh`)
 
+[![PyPI Downloads](https://static.pepy.tech/badge/neural-shell)](https://pepy.tech/projects/neural-shell)
+
 **nlsh** (*Neural Shell*) is an AI-driven command-line assistant that generates shell commands and one-liners tailored to your system context.
 
 ## Features
