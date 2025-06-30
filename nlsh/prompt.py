@@ -63,6 +63,8 @@ Formatting rules:
 user will provide you a git diff and optionally the full content of changed files, and you have to create a suitable commit message summarizing the changes.
 Output only the commit message (subject and optional body). Do not include explanations or markdown formatting like ```.
 
+{language_instruction}
+
 {declined_messages}
 """
 
@@ -147,11 +149,12 @@ Generate only the command, nothing else."""
             system_context=system_context,
         )
     
-    def build_git_commit_system_prompt(self, declined_messages: List[str] = []) -> str:
+    def build_git_commit_system_prompt(self, declined_messages: List[str] = [], language: str = None) -> str:
         """Build the system prompt for git commit message generation.
         
         Args:
             declined_messages: List of declined commit messages.
+            language: Language for commit message generation.
             
         Returns:
             str: Formatted system prompt for git commit message generation.
@@ -159,8 +162,13 @@ Generate only the command, nothing else."""
         declined_messages_str = ""
         if declined_messages:
             declined_messages_str = "The following commit messages were previously declined by the user, so propose something different:\n\n" + "\n\n----------------\n\n".join(declined_messages)
+        
+        language_instruction = ""
+        if language:
+            language_instruction = f"Generate the commit message in {language}."
             
         return self.GIT_COMMIT_SYSTEM_PROMPT.format(
+            language_instruction=language_instruction,
             declined_messages=declined_messages_str
         )
 
