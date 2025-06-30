@@ -223,7 +223,6 @@ def generate_commit_message(
     backend_index: Optional[int],
     git_diff: str,
     changed_files_content: Optional[Dict[str, str]], # Dict of {filepath: content}
-    declined_messages: List[str] = [],
     verbose: bool = False,
     log_file: Optional[str] = None,
     language: Optional[str] = None,
@@ -238,16 +237,90 @@ def generate_commit_message(
     # Initialize backend and build prompts
     backend_manager = BackendManager(config)
     backend = backend_manager.get_backend(backend_index)
-    regeneration_count = len(declined_messages)
     
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_git_commit_system_prompt(declined_messages, language)
+    system_prompt = prompt_builder.build_git_commit_system_prompt(language)
     user_prompt = prompt_builder.build_git_commit_user_prompt(git_diff, changed_files_content)
 
     # Start spinner if not in verbose mode
     spinner = None
     if not verbose:
         spinner = Spinner("Generating commit message")
+        spinner.start()
+
+    try:
+        # Generate response
+        response_content = asyncio.run(backend.generate_response(
+            user_prompt, 
+            system_prompt, 
+            verbose=verbose, 
+            strip_markdown=True,
+            max_tokens=GIT_COMMIT_MESSAGE_MAX_TOKENS
+        ))
+
+        log(log_file, backend, system_prompt, user_prompt, response_content)
+
+        if not response_content:
+            raise EmptyCommitMessageError("LLM returned an empty commit message.")
+
+        return response_content
+
+    except openai.BadRequestError as e:
+        # Handle context length errors specifically
+        error_str = str(e).lower()
+        if "context_length_exceeded" in error_str or "too large" in error_str or "context length" in error_str:
+            error_msg = (
+                "Error: The diff and file contents combined are too large for the selected model's context window.\n"
+                "Try running again with the '--no-full-files' flag."
+            )
+            print(error_msg, file=sys.stderr)
+            raise ContextLengthExceededError(error_msg) from e
+        
+        # Re-raise other BadRequestErrors
+        raise NlgcError(f"LLM API request failed: {str(e)}") from e
+    except Exception as e:
+        # Re-raise other exceptions
+        if not isinstance(e, (ContextLengthExceededError, EmptyCommitMessageError)):
+            raise NlgcError(f"Error generating commit message: {str(e)}") from e
+        raise
+    finally:
+        # Always stop the spinner
+        if spinner:
+            spinner.stop()
+
+
+def generate_commit_message_regeneration(
+    config: Config,
+    backend_index: Optional[int],
+    git_diff: str,
+    changed_files_content: Optional[Dict[str, str]],
+    declined_messages: List[str],
+    verbose: bool = False,
+    log_file: Optional[str] = None,
+    language: Optional[str] = None,
+) -> str:
+    """Generate a regenerated commit message using the specified backend.
+
+    Raises:
+        ContextLengthExceededError: If the prompt is too long for the model.
+        EmptyCommitMessageError: If the model returns an empty message.
+        NlgcError: For other API or backend errors.
+    """
+    # Initialize backend and build prompts
+    backend_manager = BackendManager(config)
+    backend = backend_manager.get_backend(backend_index)
+    regeneration_count = len(declined_messages)
+    
+    prompt_builder = PromptBuilder(config)
+    system_prompt = prompt_builder.build_git_commit_regeneration_system_prompt(language)
+    user_prompt = prompt_builder.build_git_commit_regeneration_user_prompt(
+        git_diff, changed_files_content, declined_messages
+    )
+
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner("Regenerating commit message")
         spinner.start()
 
     try:
@@ -378,22 +451,33 @@ def _generate_and_confirm_message(config, args, git_diff, changed_files_content,
     """
     if declined_messages is None:
         declined_messages = []
-        
-    commit_message = generate_commit_message(
-        config,
-        args.backend,
-        git_diff,
-        changed_files_content,
-        declined_messages=declined_messages,
-        verbose=args.verbose > 0,
-        log_file=args.log_file,
-        language=language,
-    )
+    
+    # Use regeneration function if we have declined messages, otherwise use initial generation
+    if declined_messages:
+        commit_message = generate_commit_message_regeneration(
+            config,
+            args.backend,
+            git_diff,
+            changed_files_content,
+            declined_messages,
+            verbose=args.verbose > 0,
+            log_file=args.log_file,
+            language=language,
+        )
+    else:
+        commit_message = generate_commit_message(
+            config,
+            args.backend,
+            git_diff,
+            changed_files_content,
+            verbose=args.verbose > 0,
+            log_file=args.log_file,
+            language=language,
+        )
 
     confirmation = confirm_commit(commit_message)
 
     if confirmation == "regenerate":
-        print("Regenerating commit message...")
         declined_messages.append(commit_message)
         return False, 0  # Continue loop
     elif confirmation == "edit":
