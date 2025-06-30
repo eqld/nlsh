@@ -59,13 +59,21 @@ Formatting rules:
 - Avoid technical jargon if possible."""
 
     # Git commit system prompt template
-    GIT_COMMIT_SYSTEM_PROMPT = """You are an AI assistant that generates concise git commit messages following conventional commit standards (e.g., 'feat: description').
+    GIT_COMMIT_SYSTEM_PROMPT = """You are an AI assistant that generates concise git commit messages following conventional commit standards (e.g., 'feat: description', 'fix: description', 'docs: description').
 user will provide you a git diff and optionally the full content of changed files, and you have to create a suitable commit message summarizing the changes.
 Output only the commit message (subject and optional body). Do not include explanations or markdown formatting like ```.
 
 {language_instruction}
+"""
 
-{declined_messages}
+    # Git commit regeneration system prompt template
+    GIT_COMMIT_REGENERATION_SYSTEM_PROMPT = """You are an AI assistant that regenerates git commit messages based on user feedback.
+The user has rejected previous commit message suggestions and may have provided specific guidance.
+Your task is to generate a different commit message that better summarizes the changes.
+Follow conventional commit standards (e.g., 'feat: description', 'fix: description', 'docs: description').
+Output only the commit message (subject and optional body). Do not include explanations or markdown formatting like ```.
+
+{language_instruction}
 """
 
     # STDIN processing system prompt template
@@ -149,27 +157,21 @@ Generate only the command, nothing else."""
             system_context=system_context,
         )
     
-    def build_git_commit_system_prompt(self, declined_messages: List[str] = [], language: str = None) -> str:
+    def build_git_commit_system_prompt(self, language: str = None) -> str:
         """Build the system prompt for git commit message generation.
         
         Args:
-            declined_messages: List of declined commit messages.
             language: Language for commit message generation.
             
         Returns:
             str: Formatted system prompt for git commit message generation.
         """
-        declined_messages_str = ""
-        if declined_messages:
-            declined_messages_str = "The following commit messages were previously declined by the user, so propose something different:\n\n" + "\n\n----------------\n\n".join(declined_messages)
-        
         language_instruction = ""
         if language:
             language_instruction = f"Generate the commit message in {language}."
             
         return self.GIT_COMMIT_SYSTEM_PROMPT.format(
-            language_instruction=language_instruction,
-            declined_messages=declined_messages_str
+            language_instruction=language_instruction
         )
 
     def load_prompt_from_file(self, file_path: str) -> str:
@@ -327,3 +329,55 @@ Input content:
             prompt += "Please generate a command that accomplishes this request."
         
         return prompt
+
+    def build_git_commit_regeneration_system_prompt(self, language: str = None) -> str:
+        """Build the system prompt for git commit message regeneration.
+        
+        Args:
+            language: Language for commit message generation.
+            
+        Returns:
+            str: Formatted system prompt for git commit message regeneration.
+        """
+        language_instruction = ""
+        if language:
+            language_instruction = f"Generate the commit message in {language}."
+            
+        return self.GIT_COMMIT_REGENERATION_SYSTEM_PROMPT.format(
+            language_instruction=language_instruction
+        )
+
+    def build_git_commit_regeneration_user_prompt(
+        self, 
+        git_diff: str, 
+        changed_files_content: dict = None, 
+        declined_messages: List[str] = []
+    ) -> str:
+        """Build the user prompt for git commit message regeneration.
+        
+        Args:
+            git_diff: Git diff output.
+            changed_files_content: Dict of file contents.
+            declined_messages: List of previously declined commit messages.
+            
+        Returns:
+            str: Formatted user prompt for git commit message regeneration.
+        """
+        user_prompt = "Generate a different commit message for the following changes:\n\n"
+        user_prompt += "Git Diff:\n```diff\n" + git_diff + "\n```\n\n"
+        
+        # Add file content if available
+        if changed_files_content:
+            user_prompt += "Full content of changed files:\n"
+            for file_path, content in changed_files_content.items():
+                user_prompt += f"--- {file_path} ---\n"
+                user_prompt += content + "\n\n"
+        
+        # Add declined messages
+        if declined_messages:
+            user_prompt += "Previously declined commit messages:\n\n"
+            for i, message in enumerate(declined_messages, 1):
+                user_prompt += f"* Declined commit message {i}:\n{message}\n\n"
+            user_prompt += "\n\nPlease generate a different commit message that better summarizes the changes.\n"
+                
+        return user_prompt
