@@ -112,6 +112,12 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         help="Consider all tracked files, not just staged changes."
     )
 
+    # Language for commit message generation
+    parser.add_argument(
+        "--language", "-l",
+        help="Language for commit message generation (e.g., 'Spanish', 'French', 'German')"
+    )
+
     return parser.parse_args(args)
 
 
@@ -220,6 +226,7 @@ def generate_commit_message(
     declined_messages: List[str] = [],
     verbose: bool = False,
     log_file: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> str:
     """Generate a commit message using the specified backend.
 
@@ -234,7 +241,7 @@ def generate_commit_message(
     regeneration_count = len(declined_messages)
     
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_git_commit_system_prompt(declined_messages)
+    system_prompt = prompt_builder.build_git_commit_system_prompt(declined_messages, language)
     user_prompt = prompt_builder.build_git_commit_user_prompt(git_diff, changed_files_content)
 
     # Start spinner if not in verbose mode
@@ -352,7 +359,7 @@ def _prepare_git_data(args, include_full_files):
     return git_diff, changed_files_content
 
 
-def _generate_and_confirm_message(config, args, git_diff, changed_files_content, declined_messages=None):
+def _generate_and_confirm_message(config, args, git_diff, changed_files_content, declined_messages=None, language=None):
     """Generate and confirm a commit message.
     
     Args:
@@ -361,6 +368,7 @@ def _generate_and_confirm_message(config, args, git_diff, changed_files_content,
         git_diff: Git diff output.
         changed_files_content: Dict of file contents.
         declined_messages: List of previously declined messages.
+        language: Language for commit message generation.
         
     Returns:
         tuple: (success, exit_code)
@@ -379,6 +387,7 @@ def _generate_and_confirm_message(config, args, git_diff, changed_files_content,
         declined_messages=declined_messages,
         verbose=args.verbose > 0,
         log_file=args.log_file,
+        language=language,
     )
 
     confirmation = confirm_commit(commit_message)
@@ -418,6 +427,13 @@ def _main(config: Config, args: argparse.Namespace) -> int:
     if args.full_files is not None:
         include_full_files = args.full_files
 
+    # Determine language (priority: CLI arg > env var > config > default)
+    language = None
+    if args.language:
+        language = args.language.strip()
+    elif nlgc_config.get("language"):
+        language = nlgc_config.get("language")
+    
     # Get git data
     try:
         git_diff, changed_files_content = _prepare_git_data(args, include_full_files)
@@ -430,7 +446,7 @@ def _main(config: Config, args: argparse.Namespace) -> int:
     while True:
         try:
             done, exit_code = _generate_and_confirm_message(
-                config, args, git_diff, changed_files_content, declined_messages
+                config, args, git_diff, changed_files_content, declined_messages, language
             )
             if done:
                 return exit_code

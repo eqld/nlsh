@@ -33,7 +33,8 @@ class Config:
         ],
         "default_backend": 0,
         "nlgc": {
-            "include_full_files": True  # Whether nlgc includes full file content by default
+            "include_full_files": True,  # Whether nlgc includes full file content by default
+            "language": None  # Language for commit message generation (e.g., "Spanish", "French")
         }
     }
     
@@ -162,6 +163,10 @@ class Config:
             if "include_full_files" in config["nlgc"]:
                 if not isinstance(config["nlgc"]["include_full_files"], bool):
                     raise ConfigValidationError("nlgc.include_full_files must be a boolean")
+            if "language" in config["nlgc"]:
+                language = config["nlgc"]["language"]
+                if language is not None and (not isinstance(language, str) or not language.strip()):
+                    raise ConfigValidationError("nlgc.language must be null or a non-empty string")
 
     def _load_config_file(self, config_file: str) -> None:
         """Load and validate configuration from file."""
@@ -237,6 +242,11 @@ class Config:
                 self.config.setdefault("nlgc", {})["include_full_files"] = True
             elif env_val in ["false", "0", "no"]:
                 self.config.setdefault("nlgc", {})["include_full_files"] = False
+        
+        if "NLSH_NLGC_LANGUAGE" in os.environ:
+            language = os.environ["NLSH_NLGC_LANGUAGE"].strip()
+            if language:
+                self.config.setdefault("nlgc", {})["language"] = language
 
     def get_shell(self) -> str:
         """Get configured shell.

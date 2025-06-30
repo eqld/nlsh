@@ -170,6 +170,12 @@ nlgc
 # Generate using a specific backend and exclude full file content
 nlgc -1 --no-full-files
 
+# Generate commit message in Spanish
+nlgc --language Spanish
+
+# Generate commit message in French using short flag
+nlgc -l French
+
 # Edit the suggested message before committing
 nlgc
 # [Confirm] Use this message? (y/N/e/r) e 
@@ -227,6 +233,11 @@ nlgc:
   # but increases token usage significantly. Can be overridden with
   # --full-files or --no-full-files flags.
   include_full_files: true
+  
+  # Language for commit message generation (e.g., "Spanish", "French", "German")
+  # Set to null or omit for default behavior (English)
+  # Can be overridden with --language/-l flag or NLSH_NLGC_LANGUAGE env var
+  language: null
 ```
 
 *   The `is_reasoning_model` flag is used by `nlsh` to identify models that provide reasoning tokens in their responses. When this flag is set to `true` and verbose mode (`-v`) is enabled, the tool will display the model's reasoning process.
@@ -252,6 +263,7 @@ You can override configuration settings using environment variables:
 *   `NLSH_SHELL`: Overrides the `shell` setting (e.g., `export NLSH_SHELL=fish`).
 *   `NLSH_DEFAULT_BACKEND`: Overrides the `default_backend` index (e.g., `export NLSH_DEFAULT_BACKEND=1`).
 *   `NLSH_NLGC_INCLUDE_FULL_FILES`: Overrides `nlgc.include_full_files` (`true` or `false`).
+*   `NLSH_NLGC_LANGUAGE`: Overrides `nlgc.language` (e.g., `export NLSH_NLGC_LANGUAGE=Spanish`).
 *   `[BACKEND_NAME]_API_KEY`: Sets the API key for a named backend (e.g., `export OPENAI_API_KEY=sk-...`). This takes precedence over `$VAR` references in the config file.
 *   `NLSH_BACKEND_[INDEX]_API_KEY`: Sets the API key for a backend by its index (e.g., `export NLSH_BACKEND_0_API_KEY=sk-...`).
 
@@ -406,6 +418,7 @@ nlsh --prompt-file migration_task.txt
 *   `--full-files`: Forces `nlgc` to include the full content of changed files in the prompt, overriding the `nlgc.include_full_files` config setting.
 *   `--no-full-files`: Forces `nlgc` to exclude the full content of changed files from the prompt, overriding the config setting. Useful if you encounter context length errors.
 *   `-a`, `--all`: Makes `nlgc` consider all tracked, modified files, not just the ones staged for commit.
+*   `--language`, `-l`: Specifies the language for commit message generation (e.g., `--language Spanish`), overriding the `nlgc.language` config setting and `NLSH_NLGC_LANGUAGE` environment variable.
 
 --------
 

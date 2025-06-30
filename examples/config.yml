@@ -31,8 +31,14 @@ default_backend: 0
 
 # Configuration for the 'nlgc' (Neural Git Commit) command
 # Override with environment variable: NLSH_NLGC_INCLUDE_FULL_FILES (true/false)
+# Override with environment variable: NLSH_NLGC_LANGUAGE
 nlgc:
   # Whether to include the full content of changed files in the prompt
   # sent to the LLM for commit message generation. Provides more context
   # but increases token usage significantly.
   include_full_files: true
+  
+  # Language for commit message generation (e.g., "Spanish", "French", "German")
+  # Set to null or omit for default behavior (English)
+  # Can be overridden with --language/-l flag or NLSH_NLGC_LANGUAGE env var
+  language: null
