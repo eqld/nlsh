@@ -28,10 +28,15 @@ class Config:
                 "api_key": "",  # Will be populated from environment variable
                 "model": "gpt-3.5-turbo",
                 "timeout": 120.0,  # Default timeout in seconds
-                "is_reasoning_model": False  # Flag to identify reasoning models
+                "is_reasoning_model": False,  # Flag to identify reasoning models
+                "supports_vision": False  # Flag to identify vision-capable models
             }
         ],
         "default_backend": 0,
+        "stdin": {
+            "default_backend": None,  # Optional backend for text STDIN processing
+            "default_backend_vision": None  # Optional backend for image STDIN processing
+        },
         "nlgc": {
             "include_full_files": True,  # Whether nlgc includes full file content by default
             "language": None  # Language for commit message generation (e.g., "Spanish", "French")
@@ -247,6 +252,19 @@ class Config:
             language = os.environ["NLSH_NLGC_LANGUAGE"].strip()
             if language:
                 self.config.setdefault("nlgc", {})["language"] = language
+        
+        # Override stdin settings
+        if "NLSH_STDIN_DEFAULT_BACKEND" in os.environ:
+            try:
+                self.config.setdefault("stdin", {})["default_backend"] = int(os.environ["NLSH_STDIN_DEFAULT_BACKEND"])
+            except ValueError:
+                pass
+        
+        if "NLSH_STDIN_DEFAULT_BACKEND_VISION" in os.environ:
+            try:
+                self.config.setdefault("stdin", {})["default_backend_vision"] = int(os.environ["NLSH_STDIN_DEFAULT_BACKEND_VISION"])
+            except ValueError:
+                pass
 
     def get_shell(self) -> str:
         """Get configured shell.
@@ -282,6 +300,38 @@ class Config:
         """
         # Return the nlgc section, falling back to default if not present
         return self.config.get("nlgc", self.DEFAULT_CONFIG["nlgc"])
+    
+    def get_stdin_config(self) -> Dict[str, Any]:
+        """Get stdin specific configuration.
+        
+        Returns:
+            dict: stdin configuration dictionary.
+        """
+        # Return the stdin section, falling back to default if not present
+        return self.config.get("stdin", self.DEFAULT_CONFIG["stdin"])
+    
+    def get_stdin_backend(self, is_vision: bool = False) -> Optional[int]:
+        """Get appropriate backend index for STDIN processing.
+        
+        Args:
+            is_vision: Whether this is for vision/image processing.
+            
+        Returns:
+            int: Backend index to use, or None if not configured.
+        """
+        stdin_config = self.get_stdin_config()
+        
+        if is_vision:
+            # Try vision-specific backend first
+            if stdin_config.get("default_backend_vision") is not None:
+                return stdin_config["default_backend_vision"]
+        
+        # Fall back to stdin default backend
+        if stdin_config.get("default_backend") is not None:
+            return stdin_config["default_backend"]
+        
+        # Fall back to global default
+        return self.config["default_backend"]
         
     @staticmethod
     def create_default_config(config_path: Optional[Path] = None) -> Path:
