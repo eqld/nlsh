@@ -19,6 +19,7 @@ backends:
     api_key: $OPENAI_API_KEY   # Will be replaced with environment variable
     model: "gpt-4-vision-preview"  # Vision-capable model
     supports_vision: true      # This model supports image processing
+    max_image_size_mb: 20.0    # Maximum image size in MB for this backend
 
   # Local Ollama
   - name: "local-ollama"
@@ -33,6 +34,7 @@ backends:
     api_key: "ollama"          # Ollama doesn't require an API key
     model: "llava"             # Vision-capable model
     supports_vision: true      # This model supports image processing
+    max_image_size_mb: 10.0    # Smaller limit for local models
 
   # DeepSeek reasoner (reasoning model)
   - name: "deepseek-reasoner"
@@ -47,7 +49,7 @@ backends:
 default_backend: 0
 
 # STDIN processing configuration
-# Override with environment variables: NLSH_STDIN_DEFAULT_BACKEND, NLSH_STDIN_DEFAULT_BACKEND_VISION
+# Override with environment variables: NLSH_STDIN_DEFAULT_BACKEND, NLSH_STDIN_DEFAULT_BACKEND_VISION, NLSH_STDIN_MAX_TOKENS
 stdin:
   # Default backend for text STDIN processing (optional)
   # Falls back to global default_backend if not specified
@@ -57,10 +59,13 @@ stdin:
   # Falls back to stdin.default_backend or global default_backend if not specified
   # Should point to a backend with supports_vision: true
   default_backend_vision: 1
+  
+  # Maximum output tokens for STDIN processing
+  # Can be overridden with --max-tokens command line flag
+  max_tokens: 2000
 
 # Configuration for the 'nlgc' (Neural Git Commit) command
-# Override with environment variable: NLSH_NLGC_INCLUDE_FULL_FILES (true/false)
-# Override with environment variable: NLSH_NLGC_LANGUAGE
+# Override with environment variables: NLSH_NLGC_INCLUDE_FULL_FILES (true/false), NLSH_NLGC_LANGUAGE, NLSH_NLGC_DEFAULT_BACKEND
 nlgc:
   # Whether to include the full content of changed files in the prompt
   # sent to the LLM for commit message generation. Provides more context
@@ -71,3 +76,8 @@ nlgc:
   # Set to null or omit for default behavior (English)
   # Can be overridden with --language/-l flag or NLSH_NLGC_LANGUAGE env var
   language: null
+  
+  # Default backend for nlgc (optional)
+  # Falls back to global default_backend if not specified
+  # Can be overridden with NLSH_NLGC_DEFAULT_BACKEND env var
+  default_backend: null

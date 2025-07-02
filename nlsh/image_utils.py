@@ -144,6 +144,18 @@ def validate_image_size(data: bytes, max_size_mb: float = 20.0) -> None:
         raise ValueError(f"Image too large: {size_mb:.1f}MB (max: {max_size_mb}MB)")
 
 
+def get_backend_image_size_limit(backend_config: dict) -> float:
+    """Get the image size limit for a backend.
+    
+    Args:
+        backend_config: Backend configuration dictionary.
+        
+    Returns:
+        float: Maximum image size in MB.
+    """
+    return backend_config.get("max_image_size_mb", 20.0)
+
+
 def is_image_type(mime_type: str) -> bool:
     """Check if MIME type represents an image.
     

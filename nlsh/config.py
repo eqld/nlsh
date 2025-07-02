@@ -29,17 +29,20 @@ class Config:
                 "model": "gpt-3.5-turbo",
                 "timeout": 120.0,  # Default timeout in seconds
                 "is_reasoning_model": False,  # Flag to identify reasoning models
-                "supports_vision": False  # Flag to identify vision-capable models
+                "supports_vision": False,  # Flag to identify vision-capable models
+                "max_image_size_mb": 20.0  # Maximum image size in MB for vision-capable backends
             }
         ],
         "default_backend": 0,
         "stdin": {
             "default_backend": None,  # Optional backend for text STDIN processing
-            "default_backend_vision": None  # Optional backend for image STDIN processing
+            "default_backend_vision": None,  # Optional backend for image STDIN processing
+            "max_tokens": 2000  # Maximum output tokens for STDIN processing
         },
         "nlgc": {
             "include_full_files": True,  # Whether nlgc includes full file content by default
-            "language": None  # Language for commit message generation (e.g., "Spanish", "French")
+            "language": None,  # Language for commit message generation (e.g., "Spanish", "French")
+            "default_backend": None  # Optional backend for nlgc (falls back to global default)
         }
     }
     
@@ -160,6 +163,27 @@ class Config:
                         raise ConfigValidationError(f"Backend {i} timeout must be positive")
                 except ValueError:
                     raise ConfigValidationError(f"Backend {i} timeout must be a number")
+            
+            # Validate max_image_size_mb
+            if "max_image_size_mb" in backend:
+                try:
+                    max_size = float(backend["max_image_size_mb"])
+                    if max_size <= 0:
+                        raise ConfigValidationError(f"Backend {i} max_image_size_mb must be positive")
+                except ValueError:
+                    raise ConfigValidationError(f"Backend {i} max_image_size_mb must be a number")
+
+        # Validate stdin section (optional)
+        if "stdin" in config:
+            if not isinstance(config["stdin"], dict):
+                raise ConfigValidationError("stdin section must be an object")
+            if "max_tokens" in config["stdin"]:
+                try:
+                    max_tokens = int(config["stdin"]["max_tokens"])
+                    if max_tokens <= 0:
+                        raise ConfigValidationError("stdin.max_tokens must be positive")
+                except ValueError:
+                    raise ConfigValidationError("stdin.max_tokens must be an integer")
 
         # Validate nlgc section (optional)
         if "nlgc" in config:
@@ -172,6 +196,15 @@ class Config:
                 language = config["nlgc"]["language"]
                 if language is not None and (not isinstance(language, str) or not language.strip()):
                     raise ConfigValidationError("nlgc.language must be null or a non-empty string")
+            if "default_backend" in config["nlgc"]:
+                default_backend = config["nlgc"]["default_backend"]
+                if default_backend is not None:
+                    try:
+                        backend_index = int(default_backend)
+                        if backend_index < 0:
+                            raise ConfigValidationError("nlgc.default_backend must be non-negative")
+                    except ValueError:
+                        raise ConfigValidationError("nlgc.default_backend must be an integer or null")
 
     def _load_config_file(self, config_file: str) -> None:
         """Load and validate configuration from file."""
@@ -265,6 +298,19 @@ class Config:
                 self.config.setdefault("stdin", {})["default_backend_vision"] = int(os.environ["NLSH_STDIN_DEFAULT_BACKEND_VISION"])
             except ValueError:
                 pass
+        
+        if "NLSH_STDIN_MAX_TOKENS" in os.environ:
+            try:
+                self.config.setdefault("stdin", {})["max_tokens"] = int(os.environ["NLSH_STDIN_MAX_TOKENS"])
+            except ValueError:
+                pass
+        
+        # Override nlgc default backend
+        if "NLSH_NLGC_DEFAULT_BACKEND" in os.environ:
+            try:
+                self.config.setdefault("nlgc", {})["default_backend"] = int(os.environ["NLSH_NLGC_DEFAULT_BACKEND"])
+            except ValueError:
+                pass
 
     def get_shell(self) -> str:
         """Get configured shell.
@@ -329,6 +375,21 @@ class Config:
         # Fall back to stdin default backend
         if stdin_config.get("default_backend") is not None:
             return stdin_config["default_backend"]
+        
+        # Fall back to global default
+        return self.config["default_backend"]
+    
+    def get_nlgc_backend(self) -> Optional[int]:
+        """Get appropriate backend index for nlgc processing.
+        
+        Returns:
+            int: Backend index to use for nlgc.
+        """
+        nlgc_config = self.get_nlgc_config()
+        
+        # Try nlgc-specific backend first
+        if nlgc_config.get("default_backend") is not None:
+            return nlgc_config["default_backend"]
         
         # Fall back to global default
         return self.config["default_backend"]

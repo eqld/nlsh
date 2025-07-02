@@ -115,6 +115,13 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         "--log-file",
         help="Path to file for logging LLM requests and responses"
     )
+    
+    # Max tokens for STDIN processing
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        help="Maximum output tokens for STDIN processing (overrides config)"
+    )
 
     # Prompt (positional argument)
     parser.add_argument(
@@ -300,6 +307,7 @@ async def process_stdin_input(
     user_prompt: str,
     verbose: bool = False,
     log_file: Optional[str] = None,
+    max_tokens_override: Optional[int] = None,
 ) -> str:
     """Process STDIN input using the specified backend.
     
@@ -319,7 +327,7 @@ async def process_stdin_input(
         Exception: If processing fails.
     """
     # Import here to avoid circular imports
-    from nlsh.image_utils import is_image_type, validate_image_size
+    from nlsh.image_utils import is_image_type, validate_image_size, get_backend_image_size_limit
     
     # Get backend manager
     backend_manager = BackendManager(config)
@@ -328,15 +336,16 @@ async def process_stdin_input(
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_stdin_processing_system_prompt()
     
+    # Get max tokens from config or override
+    stdin_config = config.get_stdin_config()
+    max_tokens = max_tokens_override if max_tokens_override is not None else stdin_config.get("max_tokens", 2000)
+    
     # Check if this is image input
     is_image = is_image_type(mime_type)
     
     if is_image:
         # Handle image input
         try:
-            # Validate image size
-            validate_image_size(stdin_data)
-            
             if backend_index is None:
                 # Get appropriate backend for vision processing if backend number is not explicitly set as CLI argument
                 backend_index = config.get_stdin_backend(is_vision=True)
@@ -351,6 +360,11 @@ async def process_stdin_input(
                 if not backend.supports_vision():
                     raise ValueError("Selected backend does not support image processing")
             
+            # Get backend configuration and validate image size with backend-specific limit
+            backend_config = config.get_backend(backend_index)
+            max_image_size = get_backend_image_size_limit(backend_config)
+            validate_image_size(stdin_data, max_image_size)
+            
             # Start spinner if not in verbose mode
             spinner = None
             if not verbose:
@@ -364,7 +378,7 @@ async def process_stdin_input(
                     system_prompt,
                     verbose=verbose,
                     strip_markdown=False,  # Don't strip markdown for image processing
-                    max_tokens=2000,  # Allow longer responses for image processing
+                    max_tokens=max_tokens,
                     image_data=stdin_data,
                     image_mime_type=mime_type
                 )
@@ -404,7 +418,7 @@ async def process_stdin_input(
                 system_prompt,
                 verbose=verbose,
                 strip_markdown=False,  # Don't strip markdown for text processing
-                max_tokens=2000  # Allow longer responses for text processing
+                max_tokens=max_tokens
             )
             log(log_file, backend, system_prompt, user_prompt_formatted, response)
             return response
@@ -829,6 +843,7 @@ def main() -> int:
                     prompt,
                     verbose=args.verbose > 0,
                     log_file=args.log_file,
+                    max_tokens_override=args.max_tokens,
                 ))
                 
                 # Output result to STDOUT
