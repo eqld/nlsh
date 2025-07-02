@@ -518,6 +518,12 @@ def _main(config: Config, args: argparse.Namespace) -> int:
     elif nlgc_config.get("language"):
         language = nlgc_config.get("language")
     
+    # Override backend selection if not explicitly set via CLI
+    if args.backend is None:
+        # Use nlgc-specific backend if configured
+        nlgc_backend = config.get_nlgc_backend()
+        args.backend = nlgc_backend
+    
     # Get git data
     try:
         git_diff, changed_files_content = _prepare_git_data(args, include_full_files)

@@ -7,9 +7,10 @@ This module provides functionality for interacting with different LLM backends.
 import sys
 import re
 import traceback
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 
 import openai
+from nlsh.image_utils import prepare_image_for_api, is_image_type
 
 
 def strip_markdown_code_blocks(text: str) -> str:
@@ -214,7 +215,17 @@ class LLMBackend:
         
         return "Error: No response generated"
     
-    async def generate_response(self, prompt: str, system_context: str, verbose: bool = False, strip_markdown: bool = True, max_tokens: int = 500, regeneration_count: int = 0) -> str:
+    async def generate_response(
+        self,
+        prompt: str,
+        system_context: str,
+        verbose: bool = False,
+        strip_markdown: bool = True,
+        max_tokens: int = 500,
+        regeneration_count: int = 0,
+        image_data: Optional[bytes] = None,
+        image_mime_type: Optional[str] = None
+    ) -> str:
         """Generate a response from the LLM based on the prompt and context.
         
         Args:
@@ -224,6 +235,8 @@ class LLMBackend:
             strip_markdown: Whether to strip markdown code blocks from the response.
             max_tokens: Maximum tokens to generate.
             regeneration_count: Number of times the response has been regenerated.
+            image_data: Optional image data for vision models.
+            image_mime_type: MIME type of the image data.
             
         Returns:
             str: Generated response.
@@ -231,9 +244,35 @@ class LLMBackend:
         try:
             # Create messages for the chat completion
             messages = [
-                {"role": "system", "content": system_context},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": system_context}
             ]
+            
+            # Handle image input for vision models
+            if image_data and image_mime_type:
+                if not self.supports_vision():
+                    raise ValueError(f"Backend {self.name} does not support vision/image processing")
+                
+                # Prepare image for API
+                base64_image, mime_type = prepare_image_for_api(image_data, image_mime_type)
+                
+                # Create user message with image
+                user_message = {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            else:
+                # Text-only message
+                user_message = {"role": "user", "content": prompt}
+            
+            messages.append(user_message)
             
             # Calculate temperature based on regeneration count
             temperature = self._calculate_temperature(regeneration_count)
@@ -263,6 +302,14 @@ class LLMBackend:
     def _calculate_temperature(self, regeneration_count: int) -> float:
         # Calculate temperature based on regeneration count (0.2 base, +0.1 per regeneration, max 1.0)
         return min(0.2 + (regeneration_count * 0.1), 1.0)
+    
+    def supports_vision(self) -> bool:
+        """Check if this backend supports vision/image processing.
+        
+        Returns:
+            bool: True if backend supports vision.
+        """
+        return self.config.get("supports_vision", False)
 
 class BackendManager:
     """Manager for LLM backends."""
@@ -297,3 +344,38 @@ class BackendManager:
             self.backends[backend_key] = LLMBackend(backend_config)
             
         return self.backends[backend_key]
+    
+    def get_vision_capable_backend(self, preferred_index: Optional[int] = None) -> LLMBackend:
+        """Get a vision-capable backend, preferring the specified index.
+        
+        Args:
+            preferred_index: Preferred backend index to try first.
+            
+        Returns:
+            LLMBackend: Vision-capable backend instance.
+            
+        Raises:
+            ValueError: If no vision-capable backend is found.
+        """
+        # Try preferred backend first if specified
+        if preferred_index is not None:
+            backend_config = self.config.get_backend(preferred_index)
+            if backend_config and backend_config.get("supports_vision", False):
+                return self.get_backend(preferred_index)
+        
+        # Find first vision-capable backend
+        for i, backend_config in enumerate(self.config.config["backends"]):
+            if backend_config.get("supports_vision", False):
+                return self.get_backend(i)
+        
+        # No vision-capable backend found
+        raise ValueError(
+            "No vision-capable backend found. Please configure a backend with 'supports_vision: true'.\n\n"
+            "Example configuration:\n"
+            "backends:\n"
+            "  - name: \"openai-gpt4-vision\"\n"
+            "    model: \"gpt-4-vision-preview\"\n"
+            "    supports_vision: true\n\n"
+            "stdin:\n"
+            "  default_backend_vision: 0"
+        )

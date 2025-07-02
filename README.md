@@ -135,13 +135,54 @@ cat script.py | nlsh explain what this Python script does and identify any poten
 
 # Process CSV data
 cat data.csv | nlsh find the top 5 entries by sales amount and format as a table
+
+# Control output length with --max-tokens
+cat large_document.txt | nlsh --max-tokens 500 summarize this document briefly
 ```
+
+#### Image Processing Support
+
+`nlsh` automatically detects and processes image input from STDIN when using vision-capable models:
+
+```bash
+# Analyze an image
+cat image.jpg | nlsh describe what you see in this image
+
+# Extract text from screenshots
+cat screenshot.png | nlsh extract all text from this image and format it as markdown
+
+# Analyze charts and graphs
+cat chart.png | nlsh summarize the data trends shown in this chart
+
+# Process multiple images in a pipeline
+for img in *.jpg; do
+    cat "$img" | nlsh identify the main subject of this image >> results.txt
+done
+
+# Use specific backend for image processing
+cat diagram.png | nlsh -1 explain this technical diagram step by step
+```
+
+**Supported Image Formats:**
+- PNG (`.png`)
+- JPEG (`.jpg`, `.jpeg`)
+- GIF (`.gif`)
+- WebP (`.webp`)
+- BMP (`.bmp`)
+
+**Image Processing Features:**
+- Automatic input type detection (text vs. image)
+- Configurable backend selection for vision processing
+- Support for base64-encoded images
+- Size validation (max 20MB by default)
+- Seamless integration with existing STDIN workflows
 
 In STDIN processing mode:
 - No command confirmation is required
 - Output goes directly to STDOUT for easy piping
 - The LLM processes the input content according to your instructions
 - Perfect for automation and scripting workflows
+- Automatic backend selection based on input type (text vs. image)
 
 ### Using `nlgc` for Commit Messages
 
@@ -210,23 +251,52 @@ You have two options to create a configuration file:
 ```yaml
 shell: "zsh"  # Override with env $NLSH_SHELL
 backends:
+  # Text-only backend
   - name: "local-ollama"
     url: "http://localhost:11434/v1"
     api_key: "ollama"
     model: "llama3"
+    supports_vision: false  # This model doesn't support image processing
+  
+  # Vision-capable backend
+  - name: "openai-gpt4-vision"
+    url: "https://api.openai.com/v1"
+    api_key: $OPENAI_API_KEY
+    model: "gpt-4-vision-preview"
+    supports_vision: true   # This model supports image processing
+    max_image_size_mb: 20.0 # Maximum image size in MB for this backend
+  
   - name: "groq-cloud"
     url: "https://api.groq.com/v1"
     api_key: $GROQ_KEY
     model: "llama3-70b-8192"
+  
   - name: "deepseek-reasoner"
     url: "https://api.deepseek.com/v1"
     api_key: $DEEPSEEK_API_KEY
     model: "deepseek-reasoner"
     is_reasoning_model: true  # Mark as a reasoning model for verbose mode
+
 default_backend: 0
 
+# STDIN processing configuration
+# Override with environment variables: NLSH_STDIN_DEFAULT_BACKEND, NLSH_STDIN_DEFAULT_BACKEND_VISION, NLSH_STDIN_MAX_TOKENS
+stdin:
+  # Default backend for text STDIN processing (optional)
+  # Falls back to global default_backend if not specified
+  default_backend: 0
+  
+  # Default backend for image STDIN processing (optional)
+  # Falls back to stdin.default_backend or global default_backend if not specified
+  # Should point to a backend with supports_vision: true
+  default_backend_vision: 1
+  
+  # Maximum output tokens for STDIN processing
+  # Can be overridden with --max-tokens command line flag
+  max_tokens: 2000
+
 # Configuration for the 'nlgc' (Neural Git Commit) command
-# Override with environment variable: NLSH_NLGC_INCLUDE_FULL_FILES (true/false)
+# Override with environment variables: NLSH_NLGC_INCLUDE_FULL_FILES (true/false), NLSH_NLGC_LANGUAGE, NLSH_NLGC_DEFAULT_BACKEND
 nlgc:
   # Whether to include the full content of changed files in the prompt
   # sent to the LLM for commit message generation. Provides more context
@@ -238,6 +308,11 @@ nlgc:
   # Set to null or omit for default behavior (English)
   # Can be overridden with --language/-l flag or NLSH_NLGC_LANGUAGE env var
   language: null
+  
+  # Default backend for nlgc (optional)
+  # Falls back to global default_backend if not specified
+  # Can be overridden with NLSH_NLGC_DEFAULT_BACKEND env var
+  default_backend: null
 ```
 
 *   The `is_reasoning_model` flag is used by `nlsh` to identify models that provide reasoning tokens in their responses. When this flag is set to `true` and verbose mode (`-v`) is enabled, the tool will display the model's reasoning process.
@@ -262,8 +337,12 @@ You can override configuration settings using environment variables:
 
 *   `NLSH_SHELL`: Overrides the `shell` setting (e.g., `export NLSH_SHELL=fish`).
 *   `NLSH_DEFAULT_BACKEND`: Overrides the `default_backend` index (e.g., `export NLSH_DEFAULT_BACKEND=1`).
+*   `NLSH_STDIN_DEFAULT_BACKEND`: Overrides `stdin.default_backend` for text STDIN processing (e.g., `export NLSH_STDIN_DEFAULT_BACKEND=0`).
+*   `NLSH_STDIN_DEFAULT_BACKEND_VISION`: Overrides `stdin.default_backend_vision` for image STDIN processing (e.g., `export NLSH_STDIN_DEFAULT_BACKEND_VISION=1`).
+*   `NLSH_STDIN_MAX_TOKENS`: Overrides `stdin.max_tokens` for STDIN processing output token limit (e.g., `export NLSH_STDIN_MAX_TOKENS=3000`).
 *   `NLSH_NLGC_INCLUDE_FULL_FILES`: Overrides `nlgc.include_full_files` (`true` or `false`).
 *   `NLSH_NLGC_LANGUAGE`: Overrides `nlgc.language` (e.g., `export NLSH_NLGC_LANGUAGE=Spanish`).
+*   `NLSH_NLGC_DEFAULT_BACKEND`: Overrides `nlgc.default_backend` for nlgc backend selection (e.g., `export NLSH_NLGC_DEFAULT_BACKEND=2`).
 *   `[BACKEND_NAME]_API_KEY`: Sets the API key for a named backend (e.g., `export OPENAI_API_KEY=sk-...`). This takes precedence over `$VAR` references in the config file.
 *   `NLSH_BACKEND_[INDEX]_API_KEY`: Sets the API key for a backend by its index (e.g., `export NLSH_BACKEND_0_API_KEY=sk-...`).
 

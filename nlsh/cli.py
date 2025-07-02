@@ -27,15 +27,26 @@ from nlsh.spinner import Spinner
 from nlsh.editor import edit_text_in_editor
 
 
-def _check_stdin_input() -> Optional[str]:
+def _check_stdin_input() -> Optional[tuple[bytes, str]]:
     """Check if there's input from STDIN and read it.
     
     Returns:
-        str: STDIN content if available, None otherwise.
+        tuple: (content, mime_type) if available, None otherwise.
     """
     if not sys.stdin.isatty():
         try:
-            return sys.stdin.read().strip()
+            # Read binary data from stdin
+            stdin_data = sys.stdin.buffer.read()
+            if not stdin_data:
+                return None
+            
+            # Import here to avoid circular imports
+            from nlsh.image_utils import detect_input_type
+            
+            # Detect input type
+            mime_type = detect_input_type(stdin_data)
+            
+            return stdin_data, mime_type
         except Exception as e:
             print(f"Error reading from STDIN: {e}", file=sys.stderr)
             return None
@@ -103,6 +114,13 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     parser.add_argument(
         "--log-file",
         help="Path to file for logging LLM requests and responses"
+    )
+    
+    # Max tokens for STDIN processing
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        help="Maximum output tokens for STDIN processing (overrides config)"
     )
 
     # Prompt (positional argument)
@@ -284,17 +302,20 @@ async def generate_command_fix(
 async def process_stdin_input(
     config: Config,
     backend_index: Optional[int],
-    stdin_content: str,
+    stdin_data: bytes,
+    mime_type: str,
     user_prompt: str,
     verbose: bool = False,
     log_file: Optional[str] = None,
+    max_tokens_override: Optional[int] = None,
 ) -> str:
     """Process STDIN input using the specified backend.
     
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
-        stdin_content: Content read from STDIN.
+        stdin_data: Raw data read from STDIN.
+        mime_type: MIME type of the input data.
         user_prompt: User's instruction for processing the content.
         verbose: Whether to print reasoning tokens to stderr.
         log_file: Optional path to log file.
@@ -305,36 +326,104 @@ async def process_stdin_input(
     Raises:
         Exception: If processing fails.
     """
+    # Import here to avoid circular imports
+    from nlsh.image_utils import is_image_type, validate_image_size, get_backend_image_size_limit
+    
     # Get backend manager
     backend_manager = BackendManager(config)
     
     # Build prompt (no system tools needed for STDIN processing)
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_stdin_processing_system_prompt()
-    user_prompt_formatted = prompt_builder.build_stdin_processing_user_prompt(stdin_content, user_prompt)
     
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
+    # Get max tokens from config or override
+    stdin_config = config.get_stdin_config()
+    max_tokens = max_tokens_override if max_tokens_override is not None else stdin_config.get("max_tokens", 2000)
     
-    # Start spinner if not in verbose mode
-    spinner = None
-    if not verbose:
-        spinner = Spinner("Processing")
-        spinner.start()
+    # Check if this is image input
+    is_image = is_image_type(mime_type)
     
-    try:
-        # Process input
-        response = await backend.generate_response(
-            user_prompt_formatted, 
-            system_prompt, 
-            verbose=verbose, 
-            strip_markdown=False,  # Don't strip markdown for text processing
-            max_tokens=2000  # Allow longer responses for text processing
-        )
-        log(log_file, backend, system_prompt, user_prompt_formatted, response)
-        return response
-    finally:
-        if spinner: spinner.stop()
+    if is_image:
+        # Handle image input
+        try:
+            if backend_index is None:
+                # Get appropriate backend for vision processing if backend number is not explicitly set as CLI argument
+                backend_index = config.get_stdin_backend(is_vision=True)
+            
+                # Get vision-capable backend
+                try:
+                    backend = backend_manager.get_vision_capable_backend(backend_index)
+                except ValueError as e:
+                    raise ValueError(str(e))
+            else:
+                backend = backend_manager.get_backend(backend_index)
+                if not backend.supports_vision():
+                    raise ValueError("Selected backend does not support image processing")
+            
+            # Get backend configuration and validate image size with backend-specific limit
+            backend_config = config.get_backend(backend_index)
+            max_image_size = get_backend_image_size_limit(backend_config)
+            validate_image_size(stdin_data, max_image_size)
+            
+            # Start spinner if not in verbose mode
+            spinner = None
+            if not verbose:
+                spinner = Spinner("Processing image")
+                spinner.start()
+            
+            try:
+                # Process image input
+                response = await backend.generate_response(
+                    user_prompt,
+                    system_prompt,
+                    verbose=verbose,
+                    strip_markdown=False,  # Don't strip markdown for image processing
+                    max_tokens=max_tokens,
+                    image_data=stdin_data,
+                    image_mime_type=mime_type
+                )
+                log(log_file, backend, system_prompt, user_prompt, response)
+                return response
+            finally:
+                if spinner: spinner.stop()
+                
+        except Exception as e:
+            raise Exception(f"Error processing image: {str(e)}")
+    else:
+        # Handle text input
+        try:
+            stdin_content = stdin_data.decode('utf-8', errors='replace').strip()
+        except UnicodeDecodeError:
+            raise ValueError("Unable to decode STDIN input as text")
+        
+        user_prompt_formatted = prompt_builder.build_stdin_processing_user_prompt(stdin_content, user_prompt)
+        
+        if backend_index is None:
+                # Get appropriate backend if backend number is not explicitly set as CLI argument
+                backend_index = config.get_stdin_backend(is_vision=False)
+
+        # Get backend
+        backend = backend_manager.get_backend(backend_index)
+        
+        # Start spinner if not in verbose mode
+        spinner = None
+        if not verbose:
+            spinner = Spinner("Processing text")
+            spinner.start()
+        
+        try:
+            # Process text input
+            response = await backend.generate_response(
+                user_prompt_formatted,
+                system_prompt,
+                verbose=verbose,
+                strip_markdown=False,  # Don't strip markdown for text processing
+                max_tokens=max_tokens
+            )
+            log(log_file, backend, system_prompt, user_prompt_formatted, response)
+            return response
+        finally:
+            if spinner: spinner.stop()
 
 
 async def explain_command(
@@ -730,9 +819,9 @@ def main() -> int:
             print()
 
         # Check for STDIN input first
-        stdin_content = _check_stdin_input()
+        stdin_input = _check_stdin_input()
         
-        if stdin_content:
+        if stdin_input:
             # STDIN processing mode
             if not args.prompt and not args.prompt_file:
                 print("Error: No prompt provided for STDIN processing")
@@ -741,15 +830,20 @@ def main() -> int:
             # Get prompt from file or command line
             prompt = _get_prompt(args, config)
             
+            # Unpack stdin data and mime type
+            stdin_data, mime_type = stdin_input
+            
             try:
                 # Process STDIN input
                 result = asyncio.run(process_stdin_input(
                     config,
                     args.backend,
-                    stdin_content,
+                    stdin_data,
+                    mime_type,
                     prompt,
                     verbose=args.verbose > 0,
                     log_file=args.log_file,
+                    max_tokens_override=args.max_tokens,
                 ))
                 
                 # Output result to STDOUT
