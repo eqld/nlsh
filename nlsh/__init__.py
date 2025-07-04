@@ -5,4 +5,4 @@ This package provides a command-line utility that generates shell commands
 based on natural language input using LLMs.
 """
 
-__version__ = "1.3.3"
+__version__ = "1.3.4"

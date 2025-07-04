@@ -99,6 +99,13 @@ nlsh -1 list all files in the current directory
 # (command output appears here)
 ```
 
+Generate and display commands without executing them using the `-p` or `--print` flag:
+```bash
+# Generate command without execution
+nlsh -p find all PDF files larger than 10MB
+# Output: find . -name "*.pdf" -size +10M
+```
+
 With verbose mode for reasoning models:
 ```bash
 nlsh -v -2 count lines of code in all javascript files
@@ -112,6 +119,20 @@ nlsh -v -2 count lines of code in all javascript files
 ```
 
 **Note on Command Execution:** `nlsh` executes commands using non-blocking I/O with the `select` module to read from stdout/stderr. This approach ensures compatibility with a wide range of commands, including those with pipes (`|`) and redirections. The non-blocking implementation prevents deadlocks that can occur with piped commands where one process might be waiting for input before producing output. While this works well for most commands, highly interactive commands (like those with progress bars or TUI applications) might not render perfectly.
+
+### Command Explanation Mode
+
+Get detailed explanations of shell commands using the `-e` or `--explain` flag:
+
+```bash
+# Explain complex commands
+nlsh -e "find . -name '*.log' -mtime +30 -delete"
+# Provides detailed breakdown of the find command with safety warnings
+
+# Use with verbose mode for reasoning
+nlsh -e -v "tar -czf backup.tar.gz /home/user/documents"
+# Shows the AI's reasoning process before providing the explanation
+```
 
 ### STDIN Processing Mode
 
