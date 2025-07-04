@@ -122,6 +122,20 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         type=int,
         help="Maximum output tokens for STDIN processing (overrides config)"
     )
+    
+    # Print flag - generate command without executing
+    parser.add_argument(
+        "-p", "--print",
+        action="store_true",
+        help="Print inferred command without running it"
+    )
+    
+    # Explain flag - explain already crafted command
+    parser.add_argument(
+        "-e", "--explain",
+        action="store_true",
+        help="Explain already crafted command"
+    )
 
     # Prompt (positional argument)
     parser.add_argument(
@@ -818,11 +832,20 @@ def main() -> int:
             print("Using default configuration. Run 'nlsh --init' to create a config file.", file=sys.stderr)
             print()
 
+        # Validate mutually exclusive flags
+        if args.print and args.explain:
+            print("Error: --print and --explain flags cannot be used together", file=sys.stderr)
+            return 1
+
         # Check for STDIN input first
         stdin_input = _check_stdin_input()
         
         if stdin_input:
             # STDIN processing mode
+            if args.print or args.explain:
+                print("Error: --print and --explain flags cannot be used with STDIN input", file=sys.stderr)
+                return 1
+            
             if not args.prompt and not args.prompt_file:
                 print("Error: No prompt provided for STDIN processing")
                 return 1
@@ -864,6 +887,42 @@ def main() -> int:
 
         # Get prompt from file or command line
         prompt = _get_prompt(args, config)
+        
+        # Handle explain mode
+        if args.explain:
+            try:
+                explanation = asyncio.run(explain_command(
+                    config,
+                    args.backend,
+                    prompt,
+                    verbose=args.verbose,
+                    log_file=args.log_file,
+                ))
+                print(explanation)
+                return 0
+            except Exception as e:
+                print(f"Error generating explanation: {str(e)}", file=sys.stderr)
+                if args.verbose > 1:
+                    traceback.print_exc(file=sys.stderr)
+                return 1
+        
+        # Handle print mode
+        if args.print:
+            try:
+                command = asyncio.run(generate_command(
+                    config,
+                    args.backend,
+                    prompt,
+                    verbose=args.verbose > 0,
+                    log_file=args.log_file,
+                ))
+                print(command)
+                return 0
+            except Exception as e:
+                print(f"Error generating command: {str(e)}", file=sys.stderr)
+                if args.verbose > 1:
+                    traceback.print_exc(file=sys.stderr)
+                return 1
 
         # Command generation and execution loop
         fix_info = {
