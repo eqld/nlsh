@@ -13,7 +13,7 @@ with open(os.path.join("nlsh", "__init__.py"), "r") as f:
             version = line.split("=")[1].strip().strip('"').strip("'")
             break
     else:
-        version = "1.3.4"
+        version = "1.3.5"
 
 # Get long description from README
 with open("README.md", "r") as f:
@@ -33,11 +33,14 @@ setup(
         "console_scripts": [
             "nlsh=nlsh.cli:main",
             "nlgc=nlsh.git_commit:main",
+            "nlt=nlsh.token_count:main",
         ],
     },
     install_requires=[
         "openai>=1.0.0",
         "pyyaml>=5.1",
+        "tiktoken>=0.5.0",
+        "pillow>=8.0.0",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

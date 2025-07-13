@@ -21,49 +21,32 @@ YAML configuration for backends and shell preferences.
 
 ## Installation
 
-1. Clone the repository
-   ```bash
-   git clone https://github.com/eqld/nlsh.git
-   cd nlsh
-   ```
-
-2. Install the package
-   ```bash
-   # Option 1: Install in development mode with all dependencies
-   pip install -r requirements.txt
-   pip install -e .
-   
-   # Option 2: Simple installation
-   pip install .
-   ```
-
-3. Create a configuration file
-   ```bash
-   # Option 1: Use the built-in initialization command
-   nlsh --init
-   # or
-   nlgc --init
-   
-   # Option 2: Manually create the directory and copy the example
-   mkdir -p ~/.nlsh
-   cp examples/config.yml ~/.nlsh/config.yml  # Edit this file with your API keys
-   ```
-
-4. Set up your API keys
-   ```bash
-   # Edit the config file to add your API keys
-   nano ~/.nlsh/config.yml
-   
-   # Or set them as environment variables
-   export OPENAI_API_KEY=sk-...
-   export GROQ_KEY=gsk_...
-   export DEEPSEEK_API_KEY=...
-   ```
-
-It is also available in `pip`:
-
+1. Install the package
 ```bash
 pip install neural-shell
+```
+
+2. Create a configuration file
+```bash
+# Option 1: Use the built-in initialization command
+nlsh --init
+# or
+nlgc --init
+
+# Option 2: Manually create the directory and copy the example
+mkdir -p ~/.nlsh
+cp examples/config.yml ~/.nlsh/config.yml  # Edit this file with your API keys
+```
+
+3. Set up your API keys
+```bash
+# Edit the config file to add your API keys
+nano ~/.nlsh/config.yml
+
+# Or set them as environment variables
+export OPENAI_API_KEY=sk-...
+export GROQ_KEY=gsk_...
+export DEEPSEEK_API_KEY=...
 ```
 
 See: https://pypi.org/project/neural-shell/.
@@ -71,6 +54,24 @@ See: https://pypi.org/project/neural-shell/.
 PyPI project statistics:
 * https://pypistats.org/packages/neural-shell
 * https://pepy.tech/projects/neural-shell
+
+If you want to install from source:
+
+1. Clone the repository
+```bash
+git clone https://github.com/eqld/nlsh.git
+cd nlsh
+```
+
+2. Install the package
+```bash
+# Option 1: Install in development mode with all dependencies
+pip install -r requirements.txt
+pip install -e .
+
+# Option 2: Simple installation
+pip install .
+```
 
 ## Usage
 
@@ -198,7 +199,7 @@ cat diagram.png | nlsh -1 explain this technical diagram step by step
 - Size validation (max 20MB by default)
 - Seamless integration with existing STDIN workflows
 
-In STDIN processing mode:
+**In STDIN processing mode:**
 - No command confirmation is required
 - Output goes directly to STDOUT for easy piping
 - The LLM processes the input content according to your instructions
@@ -249,6 +250,32 @@ nlgc
 ```
 
 `nlgc` analyzes the diff of staged files and, optionally, their full content to generate a conventional commit message. You can confirm, edit (`e`), or regenerate (`r`) the message.
+
+### Using `nlt` for Token Counting
+
+The package also includes `nlt` (Neural Language Tokenizer) to count tokens in text and image inputs:
+
+```bash
+# Count tokens from STDIN
+echo "Hello world" | nlt
+# Output: 3
+
+# Count tokens from files
+nlt -f document.txt -f image.jpg
+# Output: 2628
+
+# Count tokens with breakdown
+nlt -v -f document.txt -f image.jpg
+# Output:
+# document.txt: 1523
+# image.jpg: 1105
+# Total: 2628
+
+# Count tokens from both STDIN and files
+cat input.txt | nlt -f additional.txt
+```
+
+`nlt` uses tiktoken (the same tokenizer used by OpenAI models) to provide accurate token counts for both text and image inputs.
 
 --------
 
