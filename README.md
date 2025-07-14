@@ -273,9 +273,12 @@ nlt -v -f document.txt -f image.jpg
 
 # Count tokens from both STDIN and files
 cat input.txt | nlt -f additional.txt
+
+# Count tokens with custom encoding
+cat input.txt | nlt --encoding gpt2
 ```
 
-`nlt` uses tiktoken (the same tokenizer used by OpenAI models) to provide accurate token counts for both text and image inputs.
+`nlt` uses `tiktoken` (the same tokenizer used by OpenAI models) to provide accurate token counts for both text and image inputs.
 
 --------
 
