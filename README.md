@@ -80,7 +80,7 @@ pip install .
 
 Basic usage for generating shell commands:
 ```bash
-nlsh -1 find all pdfs modified in the last 2 days and compress them
+nlsh find all pdfs modified in the last 2 days and compress them
 # Example output:
 # Suggested: find . -name "*.pdf" -mtime -2 -exec tar czvf archive.tar.gz {} +
 # [Confirm] Run this command? (y/N/e/r/x) y 
@@ -88,7 +88,7 @@ nlsh -1 find all pdfs modified in the last 2 days and compress them
 # (command output appears here)
 
 # Edit the suggested command before running:
-nlsh -1 list all files in the current directory
+nlsh list all files in the current directory
 # Example output:
 # Suggested: ls -la
 # [Confirm] Run this command? (y/N/e/r/x) e
