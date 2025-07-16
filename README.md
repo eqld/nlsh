@@ -634,3 +634,9 @@ PRs welcome! Please make sure to set up a development environment as described a
 ## License
 
 MIT © 2025 eqld
+
+--------
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=eqld/nlsh&type=Date)](https://www.star-history.com/#eqld/nlsh&Date)
