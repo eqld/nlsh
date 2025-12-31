@@ -435,7 +435,7 @@ This feature helps you understand complex commands before executing them, which 
 You can ask for a different command by responding with 'r':
 
 ```bash
-nlsh -i find large files
+nlsh find large files
 # Example output:
 # Suggested: find . -type f -size +100M
 # [Confirm] Run this command? (y/N/e/r/x) r
