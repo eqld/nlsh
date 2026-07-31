@@ -4,6 +4,7 @@ Configuration handling for nlsh.
 This module provides functionality for loading and managing configuration.
 """
 
+import copy
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -53,7 +54,7 @@ class Config:
             config_path: Optional path to configuration file.
                 If not provided, will look in default locations.
         """
-        self.config = self.DEFAULT_CONFIG.copy()
+        self.config = copy.deepcopy(self.DEFAULT_CONFIG)
         self.config_file_found = False  # Track if config file was found
         self.config_file_path = None    # Store the path that was found or would be used
         
