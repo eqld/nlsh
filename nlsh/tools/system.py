@@ -4,15 +4,16 @@ System information tool.
 This module provides a tool for gathering system information.
 """
 
+import datetime
 import os
 import platform
-import sys
+import subprocess
 
 from nlsh.tools.base import BaseTool
 
 
 class SystemInfo(BaseTool):
-    """Provides OS, kernel, and architecture context."""
+    """Provides OS, kernel, architecture, datetime, and shell context."""
 
     def get_context(self):
         """Get system information.
@@ -24,7 +25,6 @@ class SystemInfo(BaseTool):
 
         # Operating system information
         system_info.append(f"OS: {platform.system()}")
-        system_info.append(f"OS Version: {platform.version()}")
         system_info.append(f"OS Release: {platform.release()}")
 
         # Distribution information (for Linux)
@@ -46,17 +46,41 @@ class SystemInfo(BaseTool):
             mac_ver = platform.mac_ver()
             system_info.append(f"macOS Version: {mac_ver[0]}")
 
-        # Windows version
-        if platform.system() == "Windows":
-            win_ver = sys.getwindowsversion()
-            system_info.append(f"Windows Build: {win_ver.build}")
-
         # Architecture information
         system_info.append(f"Architecture: {platform.machine()}")
-        system_info.append(f"Processor: {platform.processor()}")
 
         # Python information (can be useful for commands that involve Python)
-        system_info.append(f"Python Version: {platform.python_version()}")
-        system_info.append(f"Python Implementation: {platform.python_implementation()}")
+        system_info.append(
+            f"Python: {platform.python_version()} ({platform.python_implementation()})"
+        )
+
+        # Current date/time with timezone (helps with relative-date commands)
+        now = datetime.datetime.now().astimezone()
+        tz_name = now.tzname() or ""
+        utc_offset = now.strftime("%z")
+        formatted_offset = f"UTC{utc_offset[:3]}:{utc_offset[3:]}" if utc_offset else "UTC"
+        tz_label = f"{tz_name} ({formatted_offset})" if tz_name else formatted_offset
+        system_info.append(
+            f"Current datetime: {now.strftime('%Y-%m-%d %H:%M (%a)')}, timezone: {tz_label}"
+        )
+
+        # Shell and, if cheaply obtainable, its version
+        shell_name = self.config.get_shell()
+        shell_line = f"Shell: {shell_name}"
+        shell_path = os.environ.get("SHELL")
+        if shell_path:
+            try:
+                result = subprocess.run(  # noqa: S603
+                    [shell_path, "--version"],
+                    capture_output=True,
+                    timeout=1,
+                    text=True,
+                )
+                first_line = result.stdout.strip().splitlines()[0] if result.stdout else ""
+                if first_line:
+                    shell_line = f"Shell: {shell_name} ({first_line})"
+            except Exception:  # noqa: BLE001
+                pass
+        system_info.append(shell_line)
 
         return "\n".join(system_info)
