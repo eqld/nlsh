@@ -628,10 +628,10 @@ def execute_command(command: str) -> tuple[int, str]:
             except subprocess.TimeoutExpired:
                 process.kill()
         print("\nCommand interrupted", file=sys.stderr)
-        return 130
+        return 130, output
     except Exception as e:
         print(f"Error executing command: {str(e)}", file=sys.stderr)
-        return 1
+        return 1, output
 
 
 def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, response: str):
