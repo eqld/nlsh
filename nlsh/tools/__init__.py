@@ -6,15 +6,17 @@ to enhance the context provided to the LLM.
 """
 
 from nlsh.config import Config
+from nlsh.tools.availability import ToolAvailability
 from nlsh.tools.directory import DirLister
 from nlsh.tools.environment import EnvInspector
 from nlsh.tools.system import SystemInfo
 
 # Register all available tools
 AVAILABLE_TOOLS = {
-    "DirLister": DirLister,
-    "EnvInspector": EnvInspector,
     "SystemInfo": SystemInfo,
+    "EnvInspector": EnvInspector,
+    "ToolAvailability": ToolAvailability,
+    "DirLister": DirLister,
 }
 
 
