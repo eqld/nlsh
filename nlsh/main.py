@@ -7,6 +7,7 @@ This module provides the main entry point for the nlsh utility.
 
 import sys
 import traceback
+
 from nlsh.cli import main
 
 if __name__ == "__main__":
