@@ -258,7 +258,7 @@ class Config:
                 backend["api_key"] = os.environ[env_var_name]
                 
             # Check for named API key
-            if backend["name"]:
+            if backend.get("name"):
                 env_var_name = f"{backend['name'].upper()}_API_KEY"
                 if env_var_name in os.environ:
                     backend["api_key"] = os.environ[env_var_name]
