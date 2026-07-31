@@ -90,7 +90,7 @@ class LLMBackend:
         try:
             if is_local:
                 # For local endpoints, don't send any auth headers
-                self.client = openai.OpenAI(
+                self.client = openai.AsyncOpenAI(
                     base_url=self.url,
                     api_key="dummy-key",
                     timeout=self.timeout,
@@ -107,7 +107,7 @@ class LLMBackend:
                             client.headers.clear()
                             client.headers["Content-Type"] = "application/json"
             else:
-                self.client = openai.OpenAI(
+                self.client = openai.AsyncOpenAI(
                     base_url=self.url,
                     api_key=self.api_key,
                     timeout=self.timeout
@@ -137,7 +137,7 @@ class LLMBackend:
         sys.stderr.write("Reasoning: ")
         
         # Call the API with streaming
-        stream = self.client.chat.completions.create(
+        stream = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=temperature,
@@ -147,7 +147,7 @@ class LLMBackend:
         )
         
         # Process the stream
-        for chunk in stream:
+        async for chunk in stream:
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta
                 
@@ -191,7 +191,7 @@ class LLMBackend:
             str: Generated response.
         """
         # Call the API without streaming
-        response = self.client.chat.completions.create(
+        response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=temperature,
