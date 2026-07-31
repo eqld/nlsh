@@ -19,8 +19,6 @@ from typing import Any, List, Optional, Union, TextIO
 
 from nlsh.config import Config
 from nlsh.backends import BackendManager, LLMBackend
-from nlsh.config import Config
-from nlsh.backends import BackendManager, LLMBackend
 from nlsh.tools import get_tools
 from nlsh.prompt import PromptBuilder
 from nlsh.spinner import Spinner
