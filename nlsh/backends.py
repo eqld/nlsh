@@ -112,11 +112,6 @@ class LLMBackend:
                     api_key=self.api_key,
                     timeout=self.timeout
                 )
-                # Test the connection with a minimal request
-                if not is_dummy_key:
-                    self.client.models.list()
-        except openai.AuthenticationError as e:
-            raise ValueError(f"Authentication failed for backend {self.name}: {str(e)}")
         except Exception as e:
             raise ValueError(f"Failed to initialize backend {self.name}: {str(e)}")
 
