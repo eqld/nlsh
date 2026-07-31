@@ -7,7 +7,7 @@ This module provides functionality for interacting with different LLM backends.
 import sys
 import re
 import traceback
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 
 import openai
 from nlsh.image_utils import prepare_image_for_api, is_image_type

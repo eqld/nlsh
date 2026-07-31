@@ -557,7 +557,6 @@ def _main(config: Config, args: argparse.Namespace) -> int:
             return 1
 
 
-
 def main() -> None:
     """Synchronous wrapper function for the nlgc entry point."""
     signal.signal(signal.SIGINT, handle_keyboard_interrupt)
