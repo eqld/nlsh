@@ -5,91 +5,51 @@ This module provides a tool for inspecting environment variables.
 """
 
 import os
-import re
 
 from nlsh.tools.base import BaseTool
 
 
 class EnvInspector(BaseTool):
-    """Reports environment variables for compatibility checks."""
+    """Reports a minimal, safe subset of environment variables."""
 
-    # List of sensitive environment variable patterns to filter out
-    SENSITIVE_ENV_PATTERNS = [
-        r".*TOKEN.*",
-        r".*SECRET.*",
-        r".*PASSWORD.*",
-        r".*KEY.*",
-        r".*CREDENTIAL.*",
-        r".*AUTH.*",
-        r".*ACCOUNT.*",
-        r".*NAME.*",
-        r".*EMAIL.*",
-        r".*ID.*",
-    ]
-
-    # List of important environment variables to always include
-    IMPORTANT_ENV_VARS = [
-        "PATH",
+    # Only these variables are ever sent to the LLM.
+    WHITELIST = [
         "SHELL",
-        "HOME",
-        "USER",
+        "TERM",
         "LANG",
         "LC_ALL",
-        "TERM",
         "EDITOR",
         "PAGER",
+        "HOME",
         "PWD",
+        "TMPDIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "VIRTUAL_ENV",
+        "CONDA_DEFAULT_ENV",
     ]
+    MAX_PATH_ENTRIES = 15
 
     def get_context(self):
-        """Get environment variables information.
+        """Get a whitelisted subset of environment variables.
+
+        Only variables listed in ``WHITELIST`` are ever included, plus a
+        capped preview of ``PATH`` entries. No other environment variables
+        are inspected or sent to the LLM.
 
         Returns:
             str: Formatted environment variables information.
         """
-        env_info = ["Environment Variables:"]
+        lines = ["Environment (whitelisted):"]
+        for key in self.WHITELIST:
+            value = os.environ.get(key)
+            if value:
+                lines.append(f"{key}={value}")
 
-        # Get all environment variables
-        env_vars = dict(os.environ)
+        path = os.environ.get("PATH", "")
+        entries = [e for e in path.split(os.pathsep) if e]
+        shown = entries[: self.MAX_PATH_ENTRIES]
+        lines.append(f"PATH entries ({len(entries)} total, first {len(shown)} shown):")
+        lines.extend(f"- {e}" for e in shown)
 
-        # Filter out sensitive information
-        filtered_env = {}
-        for key, value in env_vars.items():
-            # Always include important variables
-            if key in self.IMPORTANT_ENV_VARS:
-                filtered_env[key] = value
-                continue
-
-            # Filter out sensitive variables
-            if any(
-                re.match(pattern, key, re.IGNORECASE) for pattern in self.SENSITIVE_ENV_PATTERNS
-            ):
-                filtered_env[key] = "[REDACTED]"
-            else:
-                filtered_env[key] = value
-
-        # Get shell information
-        shell = filtered_env.get("SHELL", "Unknown")
-        env_info.append(f"Current shell: {shell}")
-
-        # Add PATH information (useful for command availability)
-        path = filtered_env.get("PATH", "")
-        path_entries = path.split(os.pathsep)
-        env_info.append("PATH entries:")
-        for entry in path_entries:
-            if entry:  # Skip empty entries
-                env_info.append(f"- {entry}")
-
-        # Add other important environment variables
-        env_info.append("\nOther important environment variables:")
-        for key in sorted(self.IMPORTANT_ENV_VARS):
-            if key != "PATH" and key in filtered_env:  # PATH already handled above
-                env_info.append(f"{key}={filtered_env[key]}")
-
-        # Add remaining environment variables
-        env_info.append("\nAdditional environment variables:")
-        for key in sorted(filtered_env.keys()):
-            if key not in self.IMPORTANT_ENV_VARS:
-                env_info.append(f"{key}={filtered_env[key]}")
-
-        return "\n".join(env_info)
+        return "\n".join(lines)
