@@ -34,6 +34,7 @@ class Config:
                 "is_reasoning_model": False,  # Flag to identify reasoning models
                 "supports_vision": False,  # Flag to identify vision-capable models
                 "max_image_size_mb": 20.0,  # Maximum image size in MB for vision-capable backends
+                "structured_output": "auto",  # auto | json_schema | json_object | off
             }
         ],
         "default_backend": 0,
@@ -180,6 +181,13 @@ class Config:
                 except ValueError:
                     raise ConfigValidationError(  # noqa: B904
                         f"Backend {i} max_image_size_mb must be a number"
+                    )
+
+            # Validate structured_output
+            if "structured_output" in backend:  # noqa: SIM102
+                if backend["structured_output"] not in ("auto", "json_schema", "json_object", "off"):
+                    raise ConfigValidationError(
+                        f"Backend {i} structured_output must be one of: auto, json_schema, json_object, off"
                     )
 
         # Validate stdin section (optional)
