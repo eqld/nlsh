@@ -7,6 +7,7 @@ This module provides the command-line interface for the nlsh utility.
 import argparse
 import asyncio
 import datetime
+import enum
 import json
 import locale
 import os
@@ -15,7 +16,8 @@ import signal
 import subprocess
 import sys
 import traceback
-from typing import Any, List, Optional, Union, TextIO
+from dataclasses import dataclass
+from typing import Any, List, Optional, TextIO
 
 from nlsh.config import Config
 from nlsh.backends import BackendManager, LLMBackend
@@ -23,6 +25,27 @@ from nlsh.tools import get_tools
 from nlsh.prompt import PromptBuilder
 from nlsh.spinner import Spinner
 from nlsh.editor import edit_text_in_editor
+
+
+class ConfirmationResult(enum.Enum):
+    """Possible outcomes of asking the user to confirm command execution."""
+
+    EXECUTE = "execute"
+    DECLINE = "decline"
+    REGENERATE = "regenerate"
+    EDIT = "edit"
+    EXPLAIN = "explain"
+
+
+@dataclass
+class FixInfo:
+    """State carried between iterations of the command generation loop."""
+
+    fix_command: bool = False
+    failed_command: Optional[str] = None
+    failed_command_exit_code: Optional[int] = None
+    failed_command_output: Optional[str] = None
+    regenerate: bool = False
 
 
 def _check_stdin_input() -> Optional[tuple[bytes, str]]:
@@ -487,29 +510,30 @@ async def explain_command(
     )
 
 
-def confirm_execution(command: str) -> Union[bool, str, tuple]:
+def confirm_execution(command: str) -> tuple[ConfirmationResult, Optional[str]]:
     """Ask for confirmation before executing a command.
     
     Args:
         command: Command to execute.
         
     Returns:
-        Union[bool, str, tuple]: True if confirmed, False if declined, "regenerate" if regeneration requested,
-                               "explain" if explanation requested, "edit" if editing requested.
-                               For regeneration, returns tuple ("regenerate", note) where note can be None.
+        tuple[ConfirmationResult, Optional[str]]: The confirmation result, and an
+            optional regeneration note (only set when the result is REGENERATE).
     """
     print(f"Suggested: {command}")
     response = input("[Confirm] Run this command? (y/N/e/r/x) ").strip().lower()
     
     if response in ["r", "regenerate"]:
         note = input("Note for regeneration (optional): ").strip()
-        return ("regenerate", note if note else None)
+        return ConfirmationResult.REGENERATE, (note if note else None)
     elif response in ["e", "edit"]:
-        return "edit"
+        return ConfirmationResult.EDIT, None
     elif response in ["x", "explain"]:
-        return "explain"
+        return ConfirmationResult.EXPLAIN, None
     
-    return response in ["y", "yes"]
+    if response in ["y", "yes"]:
+        return ConfirmationResult.EXECUTE, None
+    return ConfirmationResult.DECLINE, None
 
 
 def confirm_fix(command: str, code: int) -> bool:
@@ -719,7 +743,7 @@ def _handle_explain_command(config: Config, args: argparse.Namespace, command: s
         return True
 
 
-def _process_command_confirmation(config: Config, args: argparse.Namespace, command: str, declined_commands: List[dict]) -> tuple[int, bool, dict]:
+def _process_command_confirmation(config: Config, args: argparse.Namespace, command: str, declined_commands: List[dict]) -> tuple[int, bool, FixInfo]:
     """Process command confirmation and execution.
     
     Args:
@@ -731,33 +755,26 @@ def _process_command_confirmation(config: Config, args: argparse.Namespace, comm
     Returns:
         tuple: (exit_code, should_continue, fix_info)
     """
-    fix_info = {
-        "fix_command": False,
-        "failed_command": None,
-        "failed_command_exit_code": None,
-        "failed_command_output": None,
-        "regenerate": False,
-    }
+    fix_info = FixInfo()
     
     while True:
         # Ask for confirmation
-        confirmation = confirm_execution(command)
+        result, note = confirm_execution(command)
         
-        if isinstance(confirmation, tuple) and confirmation[0] == "regenerate":
+        if result == ConfirmationResult.REGENERATE:
             # Regenerate the command with optional note
-            _, note = confirmation
             declined_commands.append({"command": command, "note": note})
-            fix_info["regenerate"] = True
+            fix_info.regenerate = True
             return -1, False, fix_info  # Continue outer loop
-        elif confirmation == "edit":
+        elif result == ConfirmationResult.EDIT:
             command, should_continue = _handle_edit_command(command)
             if should_continue:
                 continue
-        elif confirmation == "explain":
+        elif result == ConfirmationResult.EXPLAIN:
             should_continue = _handle_explain_command(config, args, command)
             if should_continue:
                 continue
-        elif confirmation:
+        elif result == ConfirmationResult.EXECUTE:
             print(f"Executing: {command}")
             # Actually execute the command
             code, output = execute_command(command)
@@ -768,10 +785,10 @@ def _process_command_confirmation(config: Config, args: argparse.Namespace, comm
             # Command execution failed, ask for fixing
             fix_command = confirm_fix(command, code)
             if fix_command:
-                fix_info["fix_command"] = True
-                fix_info["failed_command"] = command
-                fix_info["failed_command_output"] = output
-                fix_info["failed_command_exit_code"] = code
+                fix_info.fix_command = True
+                fix_info.failed_command = command
+                fix_info.failed_command_output = output
+                fix_info.failed_command_exit_code = code
                 return -1, False, fix_info  # Continue outer loop
 
             # Fixing declined, return error code
@@ -925,30 +942,24 @@ def main() -> int:
                 return 1
 
         # Command generation and execution loop
-        fix_info = {
-            "fix_command": False,
-            "failed_command": None,
-            "failed_command_exit_code": None,
-            "failed_command_output": None,
-            "regenerate": False,
-        }
+        fix_info = FixInfo()
         declined_commands = []
         
         while True:
             try:
                 # Generate, fix, or regenerate command
-                if fix_info["fix_command"]:
+                if fix_info.fix_command:
                     command = asyncio.run(generate_command_fix(
                         config,
                         args.backend,
                         prompt,
-                        fix_info["failed_command"],
-                        fix_info["failed_command_exit_code"],
-                        fix_info["failed_command_output"],
+                        fix_info.failed_command,
+                        fix_info.failed_command_exit_code,
+                        fix_info.failed_command_output,
                         verbose=args.verbose > 0,
                         log_file=args.log_file,
                     ))
-                elif fix_info["regenerate"] or declined_commands:
+                elif fix_info.regenerate or declined_commands:
                     # Use regeneration logic if we have declined commands or explicit regeneration request
                     command = asyncio.run(generate_command_regeneration(
                         config,
@@ -977,8 +988,8 @@ def main() -> int:
                     return exit_code
                 
                 # Reset regenerate flag after processing
-                if fix_info.get("regenerate"):
-                    fix_info["regenerate"] = False
+                if fix_info.regenerate:
+                    fix_info.regenerate = False
                 # Otherwise continue the loop
             except Exception as e:
                 print(f"Error during command generation or execution: {str(e)}", file=sys.stderr)
