@@ -385,12 +385,17 @@ def run_git_commit(message: str) -> int:
     """Run the git commit command."""
     try:
         # Using -m avoids needing an editor for simple cases
-        result = subprocess.run(['git', 'commit', '-m', message], check=True, encoding='utf-8')
-        result.check_returncode()
+        result = subprocess.run(
+            ['git', 'commit', '-m', message],
+            check=True, capture_output=True, text=True, encoding='utf-8'
+        )
+        if result.stdout:
+            print(result.stdout, end='')
         print("Commit successful.")
         return 0
     except subprocess.CalledProcessError as e:
-        print(f"Git commit failed:\n{e.stderr}", file=sys.stderr)
+        stderr = (e.stderr or "").strip()
+        print(f"Git commit failed:\n{stderr or f'exit code {e.returncode}'}", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"Error running git commit: {str(e)}", file=sys.stderr)
