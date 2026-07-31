@@ -561,11 +561,12 @@ def execute_command(command: str) -> tuple[int, str]:
     output = ""
     process = None
 
+    # Temporarily restore default SIGINT behavior so that KeyboardInterrupt
+    # is raised normally here and handled by the except block below, instead
+    # of the top-level handler terminating the whole process.
+    previous_handler = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         shell = os.environ.get("SHELL", "/bin/sh")
-        
-        # Set up signal handler for Ctrl+C
-        signal.signal(signal.SIGINT, handle_keyboard_interrupt)
         
         # Get system encoding
         system_encoding = locale.getpreferredencoding()
@@ -632,6 +633,8 @@ def execute_command(command: str) -> tuple[int, str]:
     except Exception as e:
         print(f"Error executing command: {str(e)}", file=sys.stderr)
         return 1, output
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
 
 
 def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, response: str):
