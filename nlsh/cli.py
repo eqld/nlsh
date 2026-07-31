@@ -145,6 +145,67 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
+async def _run_generation(
+    config: Config,
+    backend_index: Optional[int],
+    system_prompt: str,
+    user_prompt: str,
+    spinner_message: str,
+    verbose: bool,
+    log_file: Optional[str],
+    *,
+    strip_markdown: bool = True,
+    max_tokens: int = 500,
+    regeneration_count: int = 0,
+) -> str:
+    """Run LLM generation with shared spinner/logging boilerplate.
+
+    Args:
+        config: Configuration object.
+        backend_index: Backend index to use.
+        system_prompt: System prompt to send to the backend.
+        user_prompt: User prompt to send to the backend.
+        spinner_message: Message to show on the spinner while waiting.
+        verbose: Whether to print reasoning tokens to stderr.
+        log_file: Optional path to log file.
+        strip_markdown: Whether to strip markdown code blocks from the response.
+        max_tokens: Maximum tokens to generate.
+        regeneration_count: Number of times the response has been regenerated.
+
+    Returns:
+        str: Generated response.
+
+    Raises:
+        Exception: If generation fails.
+    """
+    # Get backend manager
+    backend_manager = BackendManager(config)
+
+    # Get backend
+    backend = backend_manager.get_backend(backend_index)
+
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner(spinner_message)
+        spinner.start()
+
+    try:
+        # Generate response
+        response = await backend.generate_response(
+            user_prompt,
+            system_prompt,
+            verbose=verbose,
+            strip_markdown=strip_markdown,
+            max_tokens=max_tokens,
+            regeneration_count=regeneration_count,
+        )
+        log(log_file, backend, system_prompt, user_prompt, response)
+        return response
+    finally:
+        if spinner: spinner.stop()
+
+
 async def generate_command(
     config: Config, 
     backend_index: Optional[int], 
@@ -167,9 +228,6 @@ async def generate_command(
     Raises:
         Exception: If command generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
     # Get tools
     tools = get_tools(config=config)
     
@@ -177,22 +235,9 @@ async def generate_command(
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_system_prompt(tools)
     
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if not verbose:
-        spinner = Spinner("Thinking")
-        spinner.start()
-    
-    try:
-        # Generate command
-        response = await backend.generate_response(prompt, system_prompt, verbose=verbose, regeneration_count=0)
-        log(log_file, backend, system_prompt, prompt, response)
-        return response
-    finally:
-        if spinner: spinner.stop()
+    return await _run_generation(
+        config, backend_index, system_prompt, prompt, "Thinking", verbose, log_file,
+    )
 
 
 async def generate_command_regeneration(
@@ -219,9 +264,6 @@ async def generate_command_regeneration(
     Raises:
         Exception: If command generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
     # Get tools
     tools = get_tools(config=config)
     
@@ -231,22 +273,10 @@ async def generate_command_regeneration(
     user_prompt = prompt_builder.build_regeneration_user_prompt(original_request, declined_commands)
     regeneration_count = len(declined_commands)
     
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if not verbose:
-        spinner = Spinner("Regenerating")
-        spinner.start()
-    
-    try:
-        # Generate command
-        response = await backend.generate_response(user_prompt, system_prompt, verbose=verbose, regeneration_count=regeneration_count)
-        log(log_file, backend, system_prompt, user_prompt, response)
-        return response
-    finally:
-        if spinner: spinner.stop()
+    return await _run_generation(
+        config, backend_index, system_prompt, user_prompt, "Regenerating", verbose, log_file,
+        regeneration_count=regeneration_count,
+    )
 
 
 async def generate_command_fix(
@@ -277,9 +307,6 @@ async def generate_command_fix(
     Raises:
         Exception: If command generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
     # Get tools
     tools = get_tools(config=config)
     
@@ -293,22 +320,9 @@ async def generate_command_fix(
         failed_command_output,
     )
 
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if not verbose:
-        spinner = Spinner("Fixing")
-        spinner.start()
-    
-    try:
-        # Generate command
-        response = await backend.generate_response(user_prompt, system_prompt, verbose=verbose)
-        log(log_file, backend, system_prompt, user_prompt, response)
-        return response
-    finally:
-        if spinner: spinner.stop()
+    return await _run_generation(
+        config, backend_index, system_prompt, user_prompt, "Fixing", verbose, log_file,
+    )
 
 
 async def process_stdin_input(
@@ -460,9 +474,6 @@ async def explain_command(
     Raises:
         Exception: If explanation generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
     # Get tools
     tools = get_tools(config=config)
     
@@ -470,22 +481,10 @@ async def explain_command(
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_explanation_system_prompt(tools)
     
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if verbose == 0:
-        spinner = Spinner("Explaining")
-        spinner.start()
-    
-    try:
-        # Generate explanation
-        explanation = await backend.generate_response(command, system_prompt, verbose=verbose, strip_markdown=False, max_tokens=1000)
-        log(log_file, backend, system_prompt, command, explanation)
-        return explanation
-    finally:
-        if spinner: spinner.stop()
+    return await _run_generation(
+        config, backend_index, system_prompt, command, "Explaining", verbose > 0, log_file,
+        strip_markdown=False, max_tokens=1000,
+    )
 
 
 def confirm_execution(command: str) -> Union[bool, str, tuple]:
