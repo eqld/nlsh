@@ -562,6 +562,7 @@ def main() -> None:
     """Synchronous wrapper function for the nlgc entry point."""
     signal.signal(signal.SIGINT, handle_keyboard_interrupt)
     exit_code = 1 # Default exit code
+    args: Optional[argparse.Namespace] = None
     try:
         # Parse args
         args = parse_args(sys.argv[1:])
@@ -585,28 +586,17 @@ def main() -> None:
     except (ConfigValidationError, GitCommandError, NlgcError, ValueError) as e:
         # Catch known errors that might occur during config loading or async execution
         print(f"Error: {str(e)}", file=sys.stderr)
-        if _get_verbose_level() > 1: traceback.print_exc(file=sys.stderr)
+        if args is not None and args.verbose > 1: traceback.print_exc(file=sys.stderr)
         exit_code = 1
     except KeyboardInterrupt:
         print("\nOperation cancelled by user", file=sys.stderr)
         exit_code = 130
     except Exception as e:
         print(f"Fatal error: {str(e)}", file=sys.stderr)
-        if _get_verbose_level() > 1: traceback.print_exc(file=sys.stderr)
+        if args is not None and args.verbose > 1: traceback.print_exc(file=sys.stderr)
         exit_code = 1
     finally:
         sys.exit(exit_code)
-
-
-def _get_verbose_level() -> int:
-    verbose_level = 0
-    for _, arg in enumerate(sys.argv):
-        if arg == '-v': verbose_level += 1
-        if arg == '--verbose': verbose_level += 1
-        if arg.startswith('-v') and not arg.startswith('--'):
-            verbose_level += len(arg) -1
-    
-    return verbose_level
 
 
 if __name__ == "__main__":
