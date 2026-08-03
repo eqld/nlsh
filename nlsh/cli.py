@@ -19,7 +19,7 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Optional, TextIO
 
-from nlsh.backends import BackendManager, LLMBackend
+from nlsh.backends import BackendManager, CommandResult, LLMBackend
 from nlsh.config import Config
 from nlsh.editor import edit_text_in_editor
 from nlsh.prompt import PromptBuilder
@@ -46,6 +46,25 @@ class FixInfo:
     failed_command_exit_code: Optional[int] = None
     failed_command_output: Optional[str] = None
     regenerate: bool = False
+
+
+# Shared backend managers keyed by config object identity. Reusing the same
+# BackendManager (and thus the same cached LLMBackend instances) across
+# generation/regeneration/fix calls within one nlsh run lets the backend's
+# resolved structured-output mode cache (`_resolved_structured_mode`) persist
+# between attempts, avoiding retries of known-unsupported response_format
+# modes on every call.
+_backend_managers: dict[int, BackendManager] = {}
+
+
+def _get_backend_manager(config: Config) -> BackendManager:
+    """Get (or create) the shared BackendManager for a config object."""
+    key = id(config)
+    manager = _backend_managers.get(key)
+    if manager is None:
+        manager = BackendManager(config)
+        _backend_managers[key] = manager
+    return manager
 
 
 def _check_stdin_input() -> Optional[tuple[bytes, str]]:
@@ -202,13 +221,96 @@ async def _run_generation(
             spinner.stop()
 
 
+async def _run_command_generation(
+    config: Config,
+    backend_index: Optional[int],
+    system_prompt: str,
+    structured_system_prompt: Optional[str],
+    user_prompt: str,
+    spinner_message: str,
+    verbose: bool,
+    log_file: Optional[str],
+    *,
+    max_tokens: int = 500,
+    regeneration_count: int = 0,
+) -> CommandResult:
+    """Run command generation with structured output support.
+
+    When not verbose, this uses the backend's structured JSON output path
+    (`generate_structured_command`), which transparently falls back to the
+    legacy plain-text path when the backend doesn't support response_format.
+    Verbose (-v/-vv) requests always use the legacy plain-text path so the
+    reasoning-token streaming UX is preserved.
+
+    Args:
+        config: Configuration object.
+        backend_index: Backend index to use.
+        system_prompt: Plain-text system prompt (legacy path and fallbacks).
+        structured_system_prompt: JSON-variant system prompt for structured
+            attempts, or None (verbose requests don't need it).
+        user_prompt: User prompt to send to the backend.
+        spinner_message: Message to show on the spinner while waiting.
+        verbose: Whether to print reasoning tokens to stderr.
+        log_file: Optional path to log file.
+        max_tokens: Maximum tokens to generate.
+        regeneration_count: Number of times the response has been regenerated.
+
+    Returns:
+        CommandResult: Generated command with optional danger level.
+
+    Raises:
+        Exception: If generation fails.
+    """
+    # Get backend from the shared manager so the backend instance (and its
+    # resolved structured-output mode cache) persists across regeneration
+    # and fix attempts within one nlsh run.
+    backend_manager = _get_backend_manager(config)
+    backend = backend_manager.get_backend(backend_index)
+
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner(spinner_message)
+        spinner.start()
+
+    try:
+        if verbose:
+            # Legacy plain-text path (keeps -v reasoning streaming UX).
+            response = await backend.generate_response(
+                user_prompt,
+                system_prompt,
+                verbose=True,
+                strip_markdown=True,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+            )
+            result = CommandResult(command=response, danger_level=None, raw_response=response)
+        else:
+            result = await backend.generate_structured_command(
+                user_prompt,
+                system_prompt,
+                verbose=False,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+                structured_system_context=structured_system_prompt,
+            )
+
+        # Log the raw model response (JSON or plain text) as it came from
+        # the model.
+        log(log_file, backend, system_prompt, user_prompt, result.raw_response or result.command)
+        return result
+    finally:
+        if spinner:
+            spinner.stop()
+
+
 async def generate_command(
     config: Config,
     backend_index: Optional[int],
     prompt: str,
     verbose: bool = False,
     log_file: Optional[str] = None,
-) -> str:
+) -> CommandResult:
     """Generate a command using the specified backend.
 
     Args:
@@ -219,7 +321,7 @@ async def generate_command(
         log_file: Optional path to log file.
 
     Returns:
-        str: Generated shell command.
+        CommandResult: Generated shell command with optional danger level.
 
     Raises:
         Exception: If command generation fails.
@@ -227,14 +329,19 @@ async def generate_command(
     # Get tools
     tools = get_tools(config=config)
 
-    # Build prompt
+    # Build prompts (the JSON structured-output variant is only needed for
+    # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_system_prompt(tools)
+    structured_system_prompt = (
+        None if verbose else prompt_builder.build_system_prompt(tools, structured=True)
+    )
 
-    return await _run_generation(
+    return await _run_command_generation(
         config,
         backend_index,
         system_prompt,
+        structured_system_prompt,
         prompt,
         "Thinking",
         verbose,
@@ -249,7 +356,7 @@ async def generate_command_regeneration(
     declined_commands: list[dict],
     verbose: bool = False,
     log_file: Optional[str] = None,
-) -> str:
+) -> CommandResult:
     """Generate a regenerated command using the specified backend.
 
     Args:
@@ -261,7 +368,7 @@ async def generate_command_regeneration(
         log_file: Optional path to log file.
 
     Returns:
-        str: Generated shell command.
+        CommandResult: Generated shell command with optional danger level.
 
     Raises:
         Exception: If command generation fails.
@@ -269,16 +376,21 @@ async def generate_command_regeneration(
     # Get tools
     tools = get_tools(config=config)
 
-    # Build prompt
+    # Build prompts (the JSON structured-output variant is only needed for
+    # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_regeneration_system_prompt(tools)
+    structured_system_prompt = (
+        None if verbose else prompt_builder.build_regeneration_system_prompt(tools, structured=True)
+    )
     user_prompt = prompt_builder.build_regeneration_user_prompt(original_request, declined_commands)
     regeneration_count = len(declined_commands)
 
-    return await _run_generation(
+    return await _run_command_generation(
         config,
         backend_index,
         system_prompt,
+        structured_system_prompt,
         user_prompt,
         "Regenerating",
         verbose,
@@ -296,7 +408,7 @@ async def generate_command_fix(
     failed_command_output: str,
     verbose: bool = False,
     log_file: Optional[str] = None,
-) -> str:
+) -> CommandResult:
     """Generate a fix for failed command using the specified backend.
 
     Args:
@@ -310,7 +422,7 @@ async def generate_command_fix(
         log_file: Optional path to log file.
 
     Returns:
-        str: Fixed shell command.
+        CommandResult: Fixed shell command with optional danger level.
 
     Raises:
         Exception: If command generation fails.
@@ -318,9 +430,13 @@ async def generate_command_fix(
     # Get tools
     tools = get_tools(config=config)
 
-    # Build prompt
+    # Build prompts (the JSON structured-output variant is only needed for
+    # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_fixing_system_prompt(tools)
+    structured_system_prompt = (
+        None if verbose else prompt_builder.build_fixing_system_prompt(tools, structured=True)
+    )
     user_prompt = prompt_builder.build_fixing_user_prompt(
         prompt,
         failed_command,
@@ -328,10 +444,11 @@ async def generate_command_fix(
         failed_command_output,
     )
 
-    return await _run_generation(
+    return await _run_command_generation(
         config,
         backend_index,
         system_prompt,
+        structured_system_prompt,
         user_prompt,
         "Fixing",
         verbose,
@@ -750,20 +867,25 @@ def _handle_explain_command(config: Config, args: argparse.Namespace, command: s
 
 
 def _process_command_confirmation(
-    config: Config, args: argparse.Namespace, command: str, declined_commands: list[dict]
+    config: Config,
+    args: argparse.Namespace,
+    command_result: CommandResult,
+    declined_commands: list[dict],
 ) -> tuple[int, bool, FixInfo]:
     """Process command confirmation and execution.
 
     Args:
         config: Configuration object.
         args: Command-line arguments.
-        command: Command to confirm and execute.
+        command_result: Generated command (with optional model-reported
+            danger level) to confirm and execute.
         declined_commands: List of declined commands with optional notes.
 
     Returns:
         tuple: (exit_code, should_continue, fix_info)
     """
     fix_info = FixInfo()
+    command = command_result.command
 
     while True:
         # Ask for confirmation
@@ -945,7 +1067,7 @@ def main() -> int:
         # Handle print mode
         if args.print:
             try:
-                command = asyncio.run(
+                command_result = asyncio.run(
                     generate_command(
                         config,
                         args.backend,
@@ -954,7 +1076,9 @@ def main() -> int:
                         log_file=args.log_file,
                     )
                 )
-                print(command)
+                # Output contract of -p is a bare command, regardless of
+                # whether structured output was used internally.
+                print(command_result.command)
                 return 0
             except Exception as e:
                 print(f"Error generating command: {str(e)}", file=sys.stderr)
@@ -970,7 +1094,7 @@ def main() -> int:
             try:
                 # Generate, fix, or regenerate command
                 if fix_info.fix_command:
-                    command = asyncio.run(
+                    command_result = asyncio.run(
                         generate_command_fix(
                             config,
                             args.backend,
@@ -984,7 +1108,7 @@ def main() -> int:
                     )
                 elif fix_info.regenerate or declined_commands:
                     # Use regeneration logic if we have declined commands or explicit regeneration request
-                    command = asyncio.run(
+                    command_result = asyncio.run(
                         generate_command_regeneration(
                             config,
                             args.backend,
@@ -996,7 +1120,7 @@ def main() -> int:
                     )
                 else:
                     # Initial command generation
-                    command = asyncio.run(
+                    command_result = asyncio.run(
                         generate_command(
                             config,
                             args.backend,
@@ -1008,7 +1132,7 @@ def main() -> int:
 
                 # Process command confirmation and execution
                 exit_code, should_exit, fix_info = _process_command_confirmation(
-                    config, args, command, declined_commands
+                    config, args, command_result, declined_commands
                 )
 
                 if should_exit:

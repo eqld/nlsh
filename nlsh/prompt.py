@@ -11,13 +11,34 @@ from nlsh.tools.base import BaseTool
 # below at import time via plain string concatenation -- NOT inside any
 # .format() call -- so the `{shell}` placeholder here is left untouched for
 # the later `.format(shell=..., system_context=...)` calls in PromptBuilder.
-_COMMAND_OUTPUT_RULES = """STRICT OUTPUT RULES:
-1. Output ONLY the command. No explanations, no comments, no markdown fences, no leading/trailing prose.
-2. The command must be a single line valid in {shell}.
+#
+# Rules 2-6 are shared verbatim between the plain-text and JSON variants (see
+# `_COMMAND_OUTPUT_RULES_COMMON` below) -- only rule 1 (the output framing)
+# differs, since "Output ONLY the command" directly contradicts JSON
+# structured output. Keeping the shared rules in a single constant avoids
+# text drift between the two variants.
+_COMMAND_OUTPUT_RULES_COMMON = """2. The command must be a single line valid in {shell}.
 3. Never invent flags or commands that do not exist. Prefer POSIX-portable options when equivalents exist.
 4. Prefer non-destructive commands. If the request requires deleting/overwriting data, prefer the safest variant (e.g., interactive flags) unless the user explicitly asked otherwise.
 5. Never include secrets, API keys, or passwords in the command.
 6. If the request is impossible or ambiguous, output the single safest command that best matches the most likely intent — never output prose."""
+
+_COMMAND_OUTPUT_RULES = (
+    """STRICT OUTPUT RULES:
+1. Output ONLY the command. No explanations, no comments, no markdown fences, no leading/trailing prose.
+"""
+    + _COMMAND_OUTPUT_RULES_COMMON
+)
+
+# JSON structured-output variant of the same rules: rule 1 asks for a JSON
+# object instead of a bare command; rules 2-6 (about the command itself)
+# are unchanged and apply to the value of the "command" field.
+_COMMAND_OUTPUT_RULES_JSON = (
+    """STRICT OUTPUT RULES:
+1. Respond with a single JSON object with exactly two fields: "command" (the shell command as a string) and "danger_level" (one of "safe", "caution", "destructive"). No explanations, no comments, no markdown fences, no leading/trailing prose, no text outside the JSON object. The rules below apply to the value of the "command" field.
+"""
+    + _COMMAND_OUTPUT_RULES_COMMON
+)
 
 # Shared "system context" section appended after the rules in the same
 # templates. The `{system_context}` placeholder is resolved later via
@@ -47,6 +68,16 @@ class PromptBuilder:
         + _SYSTEM_CONTEXT_SECTION
     )
 
+    # JSON structured-output variant of BASE_SYSTEM_PROMPT (used when a
+    # backend's structured_output mode is not "off"; see backends.py).
+    BASE_SYSTEM_PROMPT_JSON = (
+        "You are a command-line assistant. Generate a single {shell} command "
+        "(or a short one-liner pipeline) that accomplishes the user's request.\n\n"
+        + _COMMAND_OUTPUT_RULES_JSON
+        + "\n\n"
+        + _SYSTEM_CONTEXT_SECTION
+    )
+
     # Fixing system prompt template
     FIXING_SYSTEM_PROMPT = (
         "You are a command-line assistant. A previously suggested {shell} command failed. "
@@ -54,6 +85,17 @@ class PromptBuilder:
         "single {shell} command (or a different command that accomplishes the original "
         "intent).\n\n"
         + _COMMAND_OUTPUT_RULES
+        + "\n\n"
+        + _SYSTEM_CONTEXT_SECTION
+    )
+
+    # JSON structured-output variant of FIXING_SYSTEM_PROMPT.
+    FIXING_SYSTEM_PROMPT_JSON = (
+        "You are a command-line assistant. A previously suggested {shell} command failed. "
+        "Analyze the failed command, its exit code and output, then generate a corrected "
+        "single {shell} command (or a different command that accomplishes the original "
+        "intent).\n\n"
+        + _COMMAND_OUTPUT_RULES_JSON
         + "\n\n"
         + _SYSTEM_CONTEXT_SECTION
     )
@@ -118,6 +160,16 @@ RULES:
         + _SYSTEM_CONTEXT_SECTION
     )
 
+    # JSON structured-output variant of REGENERATION_SYSTEM_PROMPT.
+    REGENERATION_SYSTEM_PROMPT_JSON = (
+        "You are a command-line assistant. The user rejected previous suggestions and may "
+        "have provided feedback. Generate a DIFFERENT single {shell} command that "
+        "accomplishes the original request, taking the feedback into account.\n\n"
+        + _COMMAND_OUTPUT_RULES_JSON
+        + "\n\n"
+        + _SYSTEM_CONTEXT_SECTION
+    )
+
     def __init__(self, config):
         """Initialize the prompt builder.
 
@@ -157,11 +209,14 @@ RULES:
             shell=self.shell, system_context=system_context
         )
 
-    def build_system_prompt(self, tools: list[BaseTool]) -> str:
+    def build_system_prompt(self, tools: list[BaseTool], structured: bool = False) -> str:
         """Build the system prompt with context from tools.
 
         Args:
             tools: List of tool instances.
+            structured: Whether to build the JSON structured-output variant
+                of the prompt (used when the backend's structured_output
+                mode is not "off"). Defaults to the plain-text variant.
 
         Returns:
             str: Formatted system prompt.
@@ -169,7 +224,8 @@ RULES:
         system_context = self._gather_tools_context(tools)
 
         # Format the base prompt with shell and system context
-        return self.BASE_SYSTEM_PROMPT.format(
+        template = self.BASE_SYSTEM_PROMPT_JSON if structured else self.BASE_SYSTEM_PROMPT
+        return template.format(
             shell=self.shell,
             system_context=system_context,
         )
@@ -204,11 +260,14 @@ RULES:
         except Exception as e:
             return f"Error loading prompt file: {str(e)}"
 
-    def build_fixing_system_prompt(self, tools: list[BaseTool]) -> str:
+    def build_fixing_system_prompt(self, tools: list[BaseTool], structured: bool = False) -> str:
         """Build the system prompt for fixing failed commands with context from tools.
 
         Args:
             tools: List of tool instances.
+            structured: Whether to build the JSON structured-output variant
+                of the prompt (used when the backend's structured_output
+                mode is not "off"). Defaults to the plain-text variant.
 
         Returns:
             str: Formatted system prompt for command fixing.
@@ -216,7 +275,8 @@ RULES:
         system_context = self._gather_tools_context(tools)
 
         # Format the fixing prompt with shell and system context
-        return self.FIXING_SYSTEM_PROMPT.format(shell=self.shell, system_context=system_context)
+        template = self.FIXING_SYSTEM_PROMPT_JSON if structured else self.FIXING_SYSTEM_PROMPT
+        return template.format(shell=self.shell, system_context=system_context)
 
     def build_fixing_user_prompt(
         self,
@@ -295,11 +355,14 @@ Please provide a fixed version of this command or a completely different command
         """
         return f"Task: {user_prompt}\n\nINPUT_START\n{stdin_content}\nINPUT_END"
 
-    def build_regeneration_system_prompt(self, tools: list[BaseTool]) -> str:
+    def build_regeneration_system_prompt(self, tools: list[BaseTool], structured: bool = False) -> str:
         """Build the system prompt for command regeneration with context from tools.
 
         Args:
             tools: List of tool instances.
+            structured: Whether to build the JSON structured-output variant
+                of the prompt (used when the backend's structured_output
+                mode is not "off"). Defaults to the plain-text variant.
 
         Returns:
             str: Formatted system prompt for command regeneration.
@@ -307,7 +370,8 @@ Please provide a fixed version of this command or a completely different command
         system_context = self._gather_tools_context(tools)
 
         # Format the regeneration prompt with shell and system context
-        return self.REGENERATION_SYSTEM_PROMPT.format(
+        template = self.REGENERATION_SYSTEM_PROMPT_JSON if structured else self.REGENERATION_SYSTEM_PROMPT
+        return template.format(
             shell=self.shell, system_context=system_context
         )
 

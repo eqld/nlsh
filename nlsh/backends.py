@@ -7,11 +7,17 @@ This module provides functionality for interacting with different LLM backends.
 import re
 import sys
 import traceback
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import openai
 
 from nlsh.image_utils import prepare_image_for_api
+from nlsh.structured import (
+    JSON_OBJECT_INSTRUCTION,
+    build_response_format,
+    parse_command_response,
+)
 
 
 def strip_markdown_code_blocks(text: str) -> str:
@@ -43,6 +49,25 @@ def strip_markdown_code_blocks(text: str) -> str:
     return result.strip()
 
 
+@dataclass
+class CommandResult:
+    """Result of a (possibly structured) command generation call.
+
+    Attributes:
+        command: The generated shell command.
+        danger_level: Model-reported danger level ("safe", "caution",
+            "destructive"), or None if unknown/unavailable (e.g. legacy
+            plain-text path, or a response that could not be parsed as
+            structured JSON).
+        raw_response: The raw model response as it came from the API (JSON or
+            plain text), before any parsing/stripping. Useful for logging.
+    """
+
+    command: str
+    danger_level: Optional[str] = None
+    raw_response: str = ""
+
+
 class LLMBackend:
     """Base class for LLM backends."""
 
@@ -59,6 +84,14 @@ class LLMBackend:
         self.model = config.get("model", "")
         self.is_reasoning_model = config.get("is_reasoning_model", False)
         self.timeout = float(config.get("timeout", 120.0))
+
+        # Structured output configuration (Phase 4). "auto" (default) tries
+        # json_schema, then json_object, then falls back to legacy plain
+        # text; the resolved working mode is cached for the lifetime of this
+        # backend instance so we don't retry a known-unsupported mode on
+        # every call (see generate_structured_command below).
+        self.structured_output = config.get("structured_output", "auto")
+        self._resolved_structured_mode: Optional[str] = None
 
         # Auto-detect reasoning models by name if not explicitly set
         if not self.is_reasoning_model and "reason" in self.name.lower():
@@ -286,6 +319,179 @@ class LLMBackend:
             print(f"Error generating command: {str(e)}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             raise
+
+    async def _try_structured_mode(
+        self,
+        mode: str,
+        prompt: str,
+        system_context: str,
+        max_tokens: int,
+        regeneration_count: int,
+    ) -> Optional["CommandResult"]:
+        """Attempt a single structured-output generation call.
+
+        Args:
+            mode: Structured output mode to attempt ("json_schema" or "json_object").
+            prompt: User prompt.
+            system_context: System prompt for the structured attempt (the
+                JSON-variant prompt when available). For json_object mode,
+                the JSON schema instruction is appended internally.
+            max_tokens: Maximum tokens to generate.
+            regeneration_count: Number of times the response has been regenerated.
+
+        Returns:
+            Optional[CommandResult]: The parsed result on success (including
+                the case where the content wasn't valid JSON and was treated
+                as a plain-text command instead), or None if the backend
+                rejected the response_format parameter (signaling the caller
+                should fall back to a different mode).
+        """
+        system_content = system_context
+        if mode == "json_object":
+            # json_object mode has no server-side schema enforcement and the
+            # OpenAI API requires the word "JSON" to appear in the messages.
+            system_content += JSON_OBJECT_INSTRUCTION
+
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+
+        temperature = self._calculate_temperature(regeneration_count)
+        response_format = build_response_format(mode)
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                n=1,
+                response_format=response_format,
+            )
+        except (openai.BadRequestError, openai.UnprocessableEntityError, TypeError):
+            # Backend doesn't support this structured output mode.
+            return None
+        except Exception as e:
+            if "response_format" in str(e):
+                return None
+            raise
+
+        if not response.choices:
+            return None
+
+        content = response.choices[0].message.content
+        if content is None:
+            return None
+        content = content.strip()
+
+        command, danger = parse_command_response(content)
+        if command is None:
+            # Not valid JSON matching the schema -- treat the raw content as
+            # a plain-text command via the legacy stripping path. This is
+            # still a "successful" attempt of this mode (not a rejection),
+            # so the caller may cache this mode as the resolved one.
+            return CommandResult(
+                command=strip_markdown_code_blocks(content),
+                danger_level=None,
+                raw_response=content,
+            )
+
+        return CommandResult(command=command, danger_level=danger, raw_response=content)
+
+    async def generate_structured_command(
+        self,
+        prompt: str,
+        system_context: str,
+        verbose: bool = False,
+        max_tokens: int = 500,
+        regeneration_count: int = 0,
+        structured_system_context: Optional[str] = None,
+    ) -> "CommandResult":
+        """Generate a shell command, preferring structured JSON output.
+
+        This method is intended for command generation/regeneration/fixing
+        only (not explanations, STDIN processing, or nlgc). It does not
+        change the behavior or signature of `generate_response`, which
+        remains the plain-text path used elsewhere.
+
+        Verbose (-v/-vv) requests always use the legacy plain-text path: the
+        reasoning-token streaming UX is preserved as-is rather than
+        replicating it for structured output, per the simplified design
+        chosen for this phase. Structured output therefore only applies to
+        non-verbose requests.
+
+        Args:
+            prompt: User prompt.
+            system_context: Plain-text system prompt (the same prompt that
+                would be passed to `generate_response`). Used for the legacy
+                plain-text path and any fallback to it.
+            verbose: Whether to print reasoning tokens to stderr. When True,
+                this always uses the legacy text path (see above).
+            max_tokens: Maximum tokens to generate.
+            regeneration_count: Number of times the response has been regenerated.
+            structured_system_context: JSON-variant system prompt used for
+                structured attempts (see PromptBuilder's `structured=True`
+                prompt variants). If not provided, `system_context` is used
+                for structured attempts as well.
+
+        Returns:
+            CommandResult: The generated command and, when available, the
+                model-reported danger level.
+        """
+
+        async def _legacy() -> "CommandResult":
+            response = await self.generate_response(
+                prompt,
+                system_context,
+                verbose=verbose,
+                strip_markdown=True,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+            )
+            return CommandResult(command=response, danger_level=None, raw_response=response)
+
+        # System prompt for structured attempts: the JSON-variant prompt if
+        # provided, otherwise the plain one.
+        structured_context = structured_system_context or system_context
+
+        if verbose or self.structured_output == "off":
+            return await _legacy()
+
+        # Determine effective mode: explicit config wins; "auto" uses the
+        # cached resolved mode if we've already determined one for this
+        # backend instance, otherwise starts with json_schema.
+        if self.structured_output in ("json_schema", "json_object"):
+            mode = self.structured_output
+        else:
+            mode = self._resolved_structured_mode or "json_schema"
+
+        if mode == "off":
+            # "auto" previously resolved to "off" for this backend instance.
+            return await _legacy()
+
+        result = await self._try_structured_mode(
+            mode, prompt, structured_context, max_tokens, regeneration_count
+        )
+        if result is not None:
+            if self.structured_output == "auto":
+                self._resolved_structured_mode = mode
+            return result
+
+        # The attempted mode was rejected by the backend.
+        if self.structured_output == "auto" and mode == "json_schema":
+            result = await self._try_structured_mode(
+                "json_object", prompt, structured_context, max_tokens, regeneration_count
+            )
+            if result is not None:
+                self._resolved_structured_mode = "json_object"
+                return result
+
+        # All structured attempts failed -- fall back to legacy plain text.
+        if self.structured_output == "auto":
+            self._resolved_structured_mode = "off"
+
+        return await _legacy()
 
     def _calculate_temperature(self, regeneration_count: int) -> float:
         # Calculate temperature based on regeneration count (0.2 base, +0.1 per regeneration, max 1.0)
