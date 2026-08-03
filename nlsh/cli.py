@@ -633,16 +633,24 @@ async def explain_command(
     )
 
 
-def confirm_execution(command: str) -> tuple[ConfirmationResult, Optional[str]]:
+def confirm_execution(
+    command: str, danger_level: Optional[str] = None
+) -> tuple[ConfirmationResult, Optional[str]]:
     """Ask for confirmation before executing a command.
 
     Args:
         command: Command to execute.
+        danger_level: Optional model-reported danger level ("safe",
+            "caution", "destructive", or None). When "destructive", an
+            extra warning line is printed before the confirmation prompt.
+            For any other value (including None), nothing extra is printed.
 
     Returns:
         tuple[ConfirmationResult, Optional[str]]: The confirmation result, and an
             optional regeneration note (only set when the result is REGENERATE).
     """
+    if danger_level == "destructive":
+        print("⚠️  The model flagged this command as potentially destructive.")
     print(f"Suggested: {command}")
     response = input("[Confirm] Run this command? (y/N/e/r/x) ").strip().lower()
 
@@ -886,10 +894,11 @@ def _process_command_confirmation(
     """
     fix_info = FixInfo()
     command = command_result.command
+    danger_level = command_result.danger_level
 
     while True:
         # Ask for confirmation
-        result, note = confirm_execution(command)
+        result, note = confirm_execution(command, danger_level)
 
         if result == ConfirmationResult.REGENERATE:
             # Regenerate the command with optional note
@@ -898,6 +907,9 @@ def _process_command_confirmation(
             return -1, False, fix_info  # Continue outer loop
         elif result == ConfirmationResult.EDIT:
             command, should_continue = _handle_edit_command(command)
+            # The edited command's danger level is no longer verified by the
+            # model, so don't keep showing the (possibly stale) warning.
+            danger_level = None
             if should_continue:
                 continue
         elif result == ConfirmationResult.EXPLAIN:

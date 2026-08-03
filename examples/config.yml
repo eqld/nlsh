@@ -12,6 +12,15 @@ backends:
     api_key: $OPENAI_API_KEY   # Will be replaced with environment variable
     model: "gpt-3.5-turbo"     # Or gpt-4, etc.
     supports_vision: false     # This model doesn't support image processing
+    # Structured JSON output mode for command generation/regeneration/fixing
+    # (has no effect on explanations, STDIN processing, or nlgc):
+    #   auto (default): try json_schema, then json_object, then fall back to
+    #                    plain text if the backend doesn't support it.
+    #   json_schema:    always request strict JSON-schema-validated output.
+    #   json_object:    always request a plain JSON object (schema described
+    #                   in the prompt instead of enforced by the API).
+    #   off:            legacy plain-text behavior, no structured output.
+    structured_output: auto    # auto (default) | json_schema | json_object | off
 
   # OpenAI GPT-4 Vision (supports images)
   - name: "openai-gpt4-vision"
