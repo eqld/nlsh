@@ -35,6 +35,7 @@ class Config:
                 "supports_vision": False,  # Flag to identify vision-capable models
                 "max_image_size_mb": 20.0,  # Maximum image size in MB for vision-capable backends
                 "structured_output": "auto",  # auto | json_schema | json_object | off
+                "tool_calling": "auto",  # auto | on | off
             }
         ],
         "default_backend": 0,
@@ -188,6 +189,13 @@ class Config:
                 if backend["structured_output"] not in ("auto", "json_schema", "json_object", "off"):
                     raise ConfigValidationError(
                         f"Backend {i} structured_output must be one of: auto, json_schema, json_object, off"
+                    )
+
+            # Validate tool_calling
+            if "tool_calling" in backend:
+                if backend["tool_calling"] not in ("auto", "on", "off"):
+                    raise ConfigValidationError(
+                        f"Backend {i} tool_calling must be one of: auto, on, off"
                     )
 
         # Validate stdin section (optional)
