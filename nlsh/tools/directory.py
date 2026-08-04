@@ -9,6 +9,7 @@ import shlex
 import stat
 
 from nlsh.tools.base import BaseTool
+from nlsh.tools.common import format_size, scan_visible_entries
 
 
 class DirLister(BaseTool):
@@ -50,7 +51,7 @@ class DirLister(BaseTool):
                         "Executable" if entry.is_file() and stats.st_mode & stat.S_IXUSR else "File"
                     )
                 ),
-                "size": self._format_size(stats.st_size),
+                "size": format_size(stats.st_size),
             }
         except (PermissionError, FileNotFoundError):
             return None
@@ -68,21 +69,14 @@ class DirLister(BaseTool):
         # Get all non-hidden files in the current directory
         files = []
         try:
-            entries = os.scandir(current_dir)
+            entries = scan_visible_entries(current_dir)
         except OSError:
             return f"Current directory: {current_dir}\n(unable to list directory contents)"
 
-        try:
-            for entry in entries:
-                # Skip hidden files (those starting with .)
-                if entry.name.startswith("."):
-                    continue
-
-                file_info = self._format_file_info(entry)
-                if file_info:
-                    files.append(file_info)
-        except OSError:
-            return f"Current directory: {current_dir}\n(unable to list directory contents)"
+        for entry in entries:
+            file_info = self._format_file_info(entry)
+            if file_info:
+                files.append(file_info)
 
         # Directories first, then files, each group alphabetical
         dirs = sorted((f for f in files if f["is_dir"]), key=lambda x: x["name"])
@@ -101,17 +95,3 @@ class DirLister(BaseTool):
             result.append(f"... and {remaining} more entries (listing truncated)")
 
         return "\n".join(result)
-
-    def _format_size(self, size_bytes):
-        """Format file size in a human-readable format.
-
-        Args:
-            size_bytes: File size in bytes.
-
-        Returns:
-            str: Formatted file size.
-        """
-        for unit in ["B", "KB", "MB", "GB", "TB"]:
-            if size_bytes < 1024 or unit == "TB":
-                return f"{size_bytes:.2f} {unit}"
-            size_bytes /= 1024

@@ -19,6 +19,7 @@ import shutil
 import subprocess
 from typing import Any, Callable, Dict, List
 
+from nlsh.tools.common import format_path_entries, format_size, scan_visible_entries
 from nlsh.tools.environment import EnvInspector
 
 MAX_OUTPUT_CHARS = 4000  # every tool result is truncated to this
@@ -61,8 +62,7 @@ def _tool_list_directory(path: str = ".", max_entries: int = 50) -> str:
         return f"Path is not a directory: {path}"
 
     try:
-        with os.scandir(resolved) as it:
-            entries = [e for e in it if not e.name.startswith(".")]
+        entries = scan_visible_entries(resolved)
     except OSError as e:
         return f"Tool error: {e}"
 
@@ -77,7 +77,7 @@ def _tool_list_directory(path: str = ".", max_entries: int = 50) -> str:
                 lines.append(f"{e.name}/")
             else:
                 try:
-                    size = e.stat(follow_symlinks=False).st_size
+                    size = format_size(e.stat(follow_symlinks=False).st_size)
                 except OSError:
                     size = "?"
                 lines.append(f"{e.name}\t{size}")
@@ -99,11 +99,7 @@ def _tool_read_env_var(name: str) -> str:
         return f"Access to environment variable '{name}' is not permitted."
 
     if name == "PATH":
-        path = os.environ.get("PATH", "")
-        entries = [e for e in path.split(os.pathsep) if e]
-        shown = entries[:_MAX_PATH_ENTRIES]
-        lines = [f"PATH entries ({len(entries)} total, first {len(shown)} shown):"]
-        lines.extend(shown)
+        lines = format_path_entries(_MAX_PATH_ENTRIES)
         return _truncate("\n".join(lines))
 
     value = os.environ.get(name)

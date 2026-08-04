@@ -7,6 +7,7 @@ This module provides a tool for inspecting environment variables.
 import os
 
 from nlsh.tools.base import BaseTool
+from nlsh.tools.common import format_path_entries
 
 
 class EnvInspector(BaseTool):
@@ -46,10 +47,6 @@ class EnvInspector(BaseTool):
             if value:
                 lines.append(f"{key}={value}")
 
-        path = os.environ.get("PATH", "")
-        entries = [e for e in path.split(os.pathsep) if e]
-        shown = entries[: self.MAX_PATH_ENTRIES]
-        lines.append(f"PATH entries ({len(entries)} total, first {len(shown)} shown):")
-        lines.extend(f"- {e}" for e in shown)
+        lines.extend(format_path_entries(self.MAX_PATH_ENTRIES, bullet="- "))
 
         return "\n".join(lines)
