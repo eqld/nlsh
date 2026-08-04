@@ -49,6 +49,18 @@ def strip_markdown_code_blocks(text: str) -> str:
     return result.strip()
 
 
+# Maximum number of tool-call round trips per generation before a final
+# answer is forced.
+MAX_TOOL_ROUNDS = 5
+
+
+class _ToolsRejected(Exception):
+    """Raised internally when a backend appears to reject the `tools`
+    (function calling) parameter. Caught by `generate_command_with_tools`,
+    which decides whether to raise a user-facing error (`tool_calling: on`)
+    or fall back silently (`tool_calling: auto`)."""
+
+
 @dataclass
 class CommandResult:
     """Result of a (possibly structured) command generation call.
@@ -61,11 +73,17 @@ class CommandResult:
             structured JSON).
         raw_response: The raw model response as it came from the API (JSON or
             plain text), before any parsing/stripping. Useful for logging.
+        tool_calls: Optional list of `{"name", "arguments", "result_chars"}`
+            summaries of local tool invocations made while generating this
+            result. None when tool calling was not used. Full tool
+            results are intentionally not stored here (they can be large) --
+            only lengths, for logging purposes.
     """
 
     command: str
     danger_level: Optional[str] = None
     raw_response: str = ""
+    tool_calls: Optional[list] = None
 
 
 class LLMBackend:
@@ -85,13 +103,20 @@ class LLMBackend:
         self.is_reasoning_model = config.get("is_reasoning_model", False)
         self.timeout = float(config.get("timeout", 120.0))
 
-        # Structured output configuration (Phase 4). "auto" (default) tries
+        # Structured output configuration. "auto" (default) tries
         # json_schema, then json_object, then falls back to legacy plain
         # text; the resolved working mode is cached for the lifetime of this
         # backend instance so we don't retry a known-unsupported mode on
         # every call (see generate_structured_command below).
         self.structured_output = config.get("structured_output", "auto")
         self._resolved_structured_mode: Optional[str] = None
+
+        # Tool calling configuration. "auto" (default) sends the
+        # `tools` parameter on the first request; if the backend rejects it,
+        # the result is cached on this instance for the rest of the process
+        # (see generate_command_with_tools below). None = not yet determined.
+        self.tool_calling = config.get("tool_calling", "auto")
+        self._tools_supported: Optional[bool] = None
 
         # Auto-detect reasoning models by name if not explicitly set
         if not self.is_reasoning_model and "reason" in self.name.lower():
@@ -144,6 +169,17 @@ class LLMBackend:
                 )
         except Exception as e:
             raise ValueError(f"Failed to initialize backend {self.name}: {str(e)}")  # noqa: B904
+
+    @property
+    def tools_supported(self) -> Optional[bool]:
+        """Whether this backend is known to support the `tools` (function
+        calling) parameter.
+
+        None means unknown/not yet attempted (only meaningful in "auto"
+        mode). True/False are cached for the lifetime of this backend
+        instance after the first tool-calling attempt.
+        """
+        return self._tools_supported
 
     async def _generate_streaming_response(
         self,
@@ -417,9 +453,8 @@ class LLMBackend:
 
         Verbose (-v/-vv) requests always use the legacy plain-text path: the
         reasoning-token streaming UX is preserved as-is rather than
-        replicating it for structured output, per the simplified design
-        chosen for this phase. Structured output therefore only applies to
-        non-verbose requests.
+        replicating it for structured output, per the simplified design.
+        Structured output therefore only applies to non-verbose requests.
 
         Args:
             prompt: User prompt.
@@ -492,6 +527,329 @@ class LLMBackend:
             self._resolved_structured_mode = "off"
 
         return await _legacy()
+
+    def _next_structured_mode(self, mode: str) -> str:
+        """Return the next structured-output mode to try after `mode` was
+        rejected by the backend.
+
+        Follows the same fallback chain as `generate_structured_command`:
+        json_schema -> json_object -> off in "auto" mode; any explicitly
+        configured mode degrades straight to "off" (no further structured
+        attempts).
+        """
+        if mode == "json_schema" and self.structured_output == "auto":
+            return "json_object"
+        return "off"
+
+    async def _tool_round_call(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+        tools_defs: Optional[list[dict]],
+        mode: str,
+        system_content_for,
+    ) -> tuple[Any, str]:
+        """Perform one non-streaming chat completion call for the tool-calling
+        loop.
+
+        Combines `tools` (function calling) with `response_format`
+        (structured output). The two features have independent fallback
+        chains: if the backend rejects `response_format` for the current
+        mode, this downgrades the mode (json_schema -> json_object -> off)
+        and retries while keeping `tools` present. If the backend instead
+        appears to reject `tools` itself (or the rejection is ambiguous),
+        this raises `_ToolsRejected` so the caller can fall back to the
+        tools-less path.
+
+        Args:
+            messages: Conversation so far (mutated in place: `messages[0]`,
+                the system message, is rewritten if the mode downgrades).
+            temperature: Temperature for generation.
+            max_tokens: Maximum tokens to generate.
+            tools_defs: OpenAI `tools` parameter value, or falsy to omit it
+                entirely (used for the final forced-answer call).
+            mode: Structured output mode to attempt first.
+            system_content_for: Callable mapping a mode to the system prompt
+                content that should be used for it.
+
+        Returns:
+            (response, resolved_mode): the API response and the structured
+            output mode that was actually used for it.
+        """
+        current_mode = mode
+        downgrades = 0
+        while True:
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "n": 1,
+            }
+            if tools_defs:
+                kwargs["tools"] = tools_defs
+            response_format = build_response_format(current_mode) if current_mode != "off" else None
+            if response_format is not None:
+                kwargs["response_format"] = response_format
+
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+                return response, current_mode
+            except (openai.BadRequestError, openai.UnprocessableEntityError, TypeError) as e:
+                msg = str(e).lower()
+                tools_issue = bool(tools_defs) and ("tool" in msg or "function" in msg)
+                format_issue = current_mode != "off" and (
+                    "response_format" in msg
+                    or "response format" in msg
+                    or "json_schema" in msg
+                    or "json schema" in msg
+                )
+                if format_issue and not tools_issue and downgrades < 2:
+                    current_mode = self._next_structured_mode(current_mode)
+                    if messages and messages[0].get("role") == "system":
+                        messages[0]["content"] = system_content_for(current_mode)
+                    downgrades += 1
+                    continue
+                if tools_defs:
+                    raise _ToolsRejected(str(e)) from e
+                raise
+            except Exception as e:
+                msg = str(e).lower()
+                if tools_defs and ("tool" in msg or "function" in msg):
+                    raise _ToolsRejected(str(e)) from e
+                if current_mode != "off" and "response_format" in msg and downgrades < 2:
+                    current_mode = self._next_structured_mode(current_mode)
+                    if messages and messages[0].get("role") == "system":
+                        messages[0]["content"] = system_content_for(current_mode)
+                    downgrades += 1
+                    continue
+                raise
+
+    async def _handle_tools_rejected(
+        self,
+        prompt: str,
+        system_context: str,
+        structured_system_context: Optional[str],
+        verbose: bool,
+        max_tokens: int,
+        regeneration_count: int,
+        error_message: str = "",
+    ) -> "CommandResult":
+        """Handle a backend's rejection of the `tools` parameter.
+
+        In "auto" mode, this caches the backend as not supporting tool
+        calling (for the remainder of the process) and falls back to the
+        structured-output path for this request. In "on" mode, this is a
+        hard configuration error -- the user must explicitly disable tool
+        calling for this backend.
+        """
+        if self.tool_calling == "on":
+            suffix = f" ({error_message})" if error_message else ""
+            raise ValueError(
+                f"Backend {self.name} rejected the 'tools' parameter required for "
+                "function calling. Set 'tool_calling: off' for this backend in your "
+                f"config to disable tool calling.{suffix}"
+            )
+
+        self._tools_supported = False
+        return await self.generate_structured_command(
+            prompt,
+            system_context,
+            verbose=verbose,
+            max_tokens=max_tokens,
+            regeneration_count=regeneration_count,
+            structured_system_context=structured_system_context,
+        )
+
+    async def generate_command_with_tools(
+        self,
+        prompt: str,
+        system_context: str,
+        registry,
+        verbose: bool = False,
+        max_tokens: int = 500,
+        regeneration_count: int = 0,
+        structured_system_context: Optional[str] = None,
+    ) -> "CommandResult":
+        """Generate a shell command, allowing the model to call local
+        read-only tools (via OpenAI function calling) to fetch context on
+        demand instead of relying solely on up-front prompt context.
+
+        This method is intended for command generation/regeneration/fixing
+        only (not explanations, STDIN processing, or nlgc), matching the
+        scope of `generate_structured_command`.
+
+        Verbose (-v/-vv) requests always use the legacy plain-text/streaming
+        path (delegated to `generate_structured_command`, which itself
+        delegates to the plain-text path for verbose requests): the
+        reasoning-token streaming UX is preserved as-is, and tool calling
+        runs in non-streaming mode only.
+
+        Args:
+            prompt: User prompt.
+            system_context: Plain-text system prompt (used for the legacy
+                path and as a fallback system prompt for "off" mode).
+            registry: A `LocalToolRegistry`-like object exposing
+                `definitions() -> list[dict]` and
+                `execute(name, arguments_json) -> str`.
+            verbose: Whether to print reasoning tokens to stderr. When True,
+                this always delegates to the legacy text path (see above).
+            max_tokens: Maximum tokens to generate.
+            regeneration_count: Number of times the response has been regenerated.
+            structured_system_context: JSON-variant system prompt used for
+                structured attempts. If not provided, `system_context` is
+                used for structured attempts as well.
+
+        Returns:
+            CommandResult: The generated command, the model-reported danger
+            level (when available), and a summary of any tool calls made.
+        """
+        # Tool calling only applies to non-verbose, non-streaming requests.
+        # Verbose requests keep the legacy streaming path (with reasoning
+        # display) exactly as generate_structured_command already does.
+        if verbose or self.tool_calling == "off" or self._tools_supported is False:
+            return await self.generate_structured_command(
+                prompt,
+                system_context,
+                verbose=verbose,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+                structured_system_context=structured_system_context,
+            )
+
+        structured_context = structured_system_context or system_context
+
+        def _system_content_for(mode: str) -> str:
+            if mode == "off":
+                return system_context
+            content = structured_context
+            if mode == "json_object":
+                content += JSON_OBJECT_INSTRUCTION
+            return content
+
+        if self.structured_output == "off":
+            mode = "off"
+        elif self.structured_output in ("json_schema", "json_object"):
+            mode = self.structured_output
+        else:
+            mode = self._resolved_structured_mode or "json_schema"
+
+        temperature = self._calculate_temperature(regeneration_count)
+        tools_defs = registry.definitions()
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _system_content_for(mode)},
+            {"role": "user", "content": prompt},
+        ]
+        tool_calls_log: list[dict[str, Any]] = []
+
+        def _parse(content: Optional[str]) -> "CommandResult":
+            text = (content or "").strip()
+            if mode != "off":
+                command, danger = parse_command_response(text)
+                if command is not None:
+                    return CommandResult(
+                        command=command,
+                        danger_level=danger,
+                        raw_response=text,
+                        tool_calls=tool_calls_log,
+                    )
+            return CommandResult(
+                command=strip_markdown_code_blocks(text),
+                danger_level=None,
+                raw_response=text,
+                tool_calls=tool_calls_log,
+            )
+
+        for _round in range(MAX_TOOL_ROUNDS):
+            try:
+                response, mode = await self._tool_round_call(
+                    messages, temperature, max_tokens, tools_defs, mode, _system_content_for
+                )
+            except _ToolsRejected as e:
+                return await self._handle_tools_rejected(
+                    prompt,
+                    system_context,
+                    structured_system_context,
+                    verbose,
+                    max_tokens,
+                    regeneration_count,
+                    str(e),
+                )
+
+            if self._tools_supported is None:
+                self._tools_supported = True
+            if self.structured_output == "auto":
+                self._resolved_structured_mode = mode
+
+            if not response.choices:
+                break
+
+            message = response.choices[0].message
+            tool_calls = getattr(message, "tool_calls", None)
+
+            if tool_calls:
+                # The assistant message carrying tool_calls MUST be appended
+                # before the corresponding tool result messages, and each
+                # tool result MUST carry the matching tool_call_id.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in tool_calls
+                        ],
+                    }
+                )
+                for tc in tool_calls:
+                    # tc.function.arguments is a JSON string, not a dict --
+                    # pass it through untouched to the registry.
+                    result = registry.execute(tc.function.name, tc.function.arguments)
+                    tool_calls_log.append(
+                        {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                            "result_chars": len(result),
+                        }
+                    )
+                    messages.append(
+                        {"role": "tool", "tool_call_id": tc.id, "content": result}
+                    )
+                continue
+
+            return _parse(message.content)
+
+        # Round cap reached (or an empty-choices response slipped through):
+        # force a final answer without tools.
+        response = None
+        try:
+            response, mode = await self._tool_round_call(
+                messages, temperature, max_tokens, None, mode, _system_content_for
+            )
+        except _ToolsRejected:
+            response = None
+
+        if response is not None and response.choices:
+            return _parse(response.choices[0].message.content)
+
+        # Still nothing usable -- fall back entirely rather than returning
+        # an empty command.
+        return await self.generate_structured_command(
+            prompt,
+            system_context,
+            verbose=verbose,
+            max_tokens=max_tokens,
+            regeneration_count=regeneration_count,
+            structured_system_context=structured_system_context,
+        )
 
     def _calculate_temperature(self, regeneration_count: int) -> float:
         # Calculate temperature based on regeneration count (0.2 base, +0.1 per regeneration, max 1.0)
