@@ -22,9 +22,10 @@ from typing import Any, Optional, TextIO
 from nlsh.backends import BackendManager, CommandResult, LLMBackend
 from nlsh.config import Config
 from nlsh.editor import edit_text_in_editor
+from nlsh.local_tools import LocalToolRegistry
 from nlsh.prompt import PromptBuilder
 from nlsh.spinner import Spinner
-from nlsh.tools import get_tools
+from nlsh.tools import get_minimal_tools, get_tools
 
 
 class ConfirmationResult(enum.Enum):
@@ -65,6 +66,33 @@ def _get_backend_manager(config: Config) -> BackendManager:
         manager = BackendManager(config)
         _backend_managers[key] = manager
     return manager
+
+
+def _should_attempt_tools(backend: LLMBackend, verbose: bool) -> bool:
+    """Decide whether native model tool calling should be attempted for this
+    command generation/regeneration/fix request.
+
+    Tool calling is attempted only for non-verbose requests (verbose keeps
+    the legacy streaming path with the full up-front context),
+    when the backend's `tool_calling` config is not "off", and when
+    the backend hasn't already been determined (in "auto" mode) to reject the
+    `tools` parameter.
+
+    Args:
+        backend: The resolved backend instance for this request.
+        verbose: Whether this is a verbose (-v/-vv) request.
+
+    Returns:
+        bool: True if a reduced-context, tool-calling-enabled prompt should
+            be built for this request.
+    """
+    if verbose:
+        return False
+    if backend.tool_calling == "off":
+        return False
+    if backend.tools_supported is False:
+        return False
+    return True
 
 
 def _check_stdin_input() -> Optional[tuple[bytes, str]]:
@@ -233,19 +261,32 @@ async def _run_command_generation(
     *,
     max_tokens: int = 500,
     regeneration_count: int = 0,
+    use_tools: bool = False,
 ) -> CommandResult:
-    """Run command generation with structured output support.
+    """Run command generation with structured output (and optional tool
+    calling) support.
 
-    When not verbose, this uses the backend's structured JSON output path
-    (`generate_structured_command`), which transparently falls back to the
-    legacy plain-text path when the backend doesn't support response_format.
+    When not verbose:
+    - If `use_tools` is True, this uses the backend's native tool-calling
+      path (`generate_command_with_tools`), letting the model call local
+      read-only tools (see `nlsh.local_tools.LocalToolRegistry`) to fetch
+      additional context on demand. That path transparently falls back to
+      the structured-output path (and further to legacy plain text) if the
+      backend rejects the `tools` parameter in "auto" mode.
+    - Otherwise, this uses the backend's structured JSON output path
+      (`generate_structured_command`), which transparently falls back to the
+      legacy plain-text path when the backend doesn't support
+      response_format.
     Verbose (-v/-vv) requests always use the legacy plain-text path so the
-    reasoning-token streaming UX is preserved.
+    reasoning-token streaming UX is preserved (tool calling never applies to
+    verbose requests; see `_should_attempt_tools`).
 
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
         system_prompt: Plain-text system prompt (legacy path and fallbacks).
+            When `use_tools` is True, callers should pass the reduced-context
+            prompt (see `PromptBuilder.build_minimal_*_system_prompt`).
         structured_system_prompt: JSON-variant system prompt for structured
             attempts, or None (verbose requests don't need it).
         user_prompt: User prompt to send to the backend.
@@ -254,6 +295,8 @@ async def _run_command_generation(
         log_file: Optional path to log file.
         max_tokens: Maximum tokens to generate.
         regeneration_count: Number of times the response has been regenerated.
+        use_tools: Whether to attempt native model tool calling for this
+            request (ignored when `verbose` is True).
 
     Returns:
         CommandResult: Generated command with optional danger level.
@@ -285,6 +328,17 @@ async def _run_command_generation(
                 regeneration_count=regeneration_count,
             )
             result = CommandResult(command=response, danger_level=None, raw_response=response)
+        elif use_tools:
+            registry = LocalToolRegistry()
+            result = await backend.generate_command_with_tools(
+                user_prompt,
+                system_prompt,
+                registry,
+                verbose=False,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+                structured_system_context=structured_system_prompt,
+            )
         else:
             result = await backend.generate_structured_command(
                 user_prompt,
@@ -326,16 +380,31 @@ async def generate_command(
     Raises:
         Exception: If command generation fails.
     """
-    # Get tools
-    tools = get_tools(config=config)
+    # Fetch the backend first (from the shared, cached manager) so we can
+    # decide whether to attempt native model tool calling for this request
+    # -- which determines whether to build the full or reduced-context
+    # up-front prompt below.
+    backend = _get_backend_manager(config).get_backend(backend_index)
+    use_tools = _should_attempt_tools(backend, verbose)
+
+    # Get tools: only the cheap ones when tool calling is active, since the
+    # model can fetch the rest (directory listings, env vars, command
+    # availability, help pages) on demand via the provided local tools.
+    tools = get_minimal_tools(config=config) if use_tools else get_tools(config=config)
 
     # Build prompts (the JSON structured-output variant is only needed for
     # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_system_prompt(tools)
-    structured_system_prompt = (
-        None if verbose else prompt_builder.build_system_prompt(tools, structured=True)
-    )
+    if use_tools:
+        system_prompt = prompt_builder.build_minimal_system_prompt(tools)
+        structured_system_prompt = (
+            None if verbose else prompt_builder.build_minimal_system_prompt(tools, structured=True)
+        )
+    else:
+        system_prompt = prompt_builder.build_system_prompt(tools)
+        structured_system_prompt = (
+            None if verbose else prompt_builder.build_system_prompt(tools, structured=True)
+        )
 
     return await _run_command_generation(
         config,
@@ -346,6 +415,7 @@ async def generate_command(
         "Thinking",
         verbose,
         log_file,
+        use_tools=use_tools,
     )
 
 
@@ -373,16 +443,29 @@ async def generate_command_regeneration(
     Raises:
         Exception: If command generation fails.
     """
+    # Fetch the backend first so we can decide whether to attempt native
+    # model tool calling for this request (see generate_command).
+    backend = _get_backend_manager(config).get_backend(backend_index)
+    use_tools = _should_attempt_tools(backend, verbose)
+
     # Get tools
-    tools = get_tools(config=config)
+    tools = get_minimal_tools(config=config) if use_tools else get_tools(config=config)
 
     # Build prompts (the JSON structured-output variant is only needed for
     # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_regeneration_system_prompt(tools)
-    structured_system_prompt = (
-        None if verbose else prompt_builder.build_regeneration_system_prompt(tools, structured=True)
-    )
+    if use_tools:
+        system_prompt = prompt_builder.build_minimal_regeneration_system_prompt(tools)
+        structured_system_prompt = (
+            None
+            if verbose
+            else prompt_builder.build_minimal_regeneration_system_prompt(tools, structured=True)
+        )
+    else:
+        system_prompt = prompt_builder.build_regeneration_system_prompt(tools)
+        structured_system_prompt = (
+            None if verbose else prompt_builder.build_regeneration_system_prompt(tools, structured=True)
+        )
     user_prompt = prompt_builder.build_regeneration_user_prompt(original_request, declined_commands)
     regeneration_count = len(declined_commands)
 
@@ -396,6 +479,7 @@ async def generate_command_regeneration(
         verbose,
         log_file,
         regeneration_count=regeneration_count,
+        use_tools=use_tools,
     )
 
 
@@ -427,16 +511,29 @@ async def generate_command_fix(
     Raises:
         Exception: If command generation fails.
     """
+    # Fetch the backend first so we can decide whether to attempt native
+    # model tool calling for this request (see generate_command).
+    backend = _get_backend_manager(config).get_backend(backend_index)
+    use_tools = _should_attempt_tools(backend, verbose)
+
     # Get tools
-    tools = get_tools(config=config)
+    tools = get_minimal_tools(config=config) if use_tools else get_tools(config=config)
 
     # Build prompts (the JSON structured-output variant is only needed for
     # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_fixing_system_prompt(tools)
-    structured_system_prompt = (
-        None if verbose else prompt_builder.build_fixing_system_prompt(tools, structured=True)
-    )
+    if use_tools:
+        system_prompt = prompt_builder.build_minimal_fixing_system_prompt(tools)
+        structured_system_prompt = (
+            None
+            if verbose
+            else prompt_builder.build_minimal_fixing_system_prompt(tools, structured=True)
+        )
+    else:
+        system_prompt = prompt_builder.build_fixing_system_prompt(tools)
+        structured_system_prompt = (
+            None if verbose else prompt_builder.build_fixing_system_prompt(tools, structured=True)
+        )
     user_prompt = prompt_builder.build_fixing_user_prompt(
         prompt,
         failed_command,
@@ -453,6 +550,7 @@ async def generate_command_fix(
         "Fixing",
         verbose,
         log_file,
+        use_tools=use_tools,
     )
 
 

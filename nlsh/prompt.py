@@ -46,6 +46,19 @@ _COMMAND_OUTPUT_RULES_JSON = (
 _SYSTEM_CONTEXT_SECTION = """SYSTEM CONTEXT (for tailoring the command to this machine):
 {system_context}"""
 
+# Appended to the "minimal" variants of the command-generation system prompts
+# (see PromptBuilder.build_minimal_*_system_prompt) when native OpenAI tool
+# calling is active for the request. In that case the up-front context is
+# reduced to the cheap tools only (SystemInfo, ToolAvailability); this note
+# tells the model it can fetch the rest (directory listings, environment
+# variables, command availability, help pages) on demand instead of the full
+# up-front context.
+_TOOL_CALLING_NOTE = (
+    "\n\nAdditional context (directory listings, environment variables, "
+    "command availability, help pages) is available via the provided "
+    "tools — call them when needed instead of guessing."
+)
+
 # Shared rules block for git commit message prompts (initial + regeneration).
 # The `{language_instruction}` placeholder is appended by the templates that
 # use this constant, not included here.
@@ -178,6 +191,78 @@ RULES:
         """
         self.config = config
         self.shell = config.get_shell()
+
+    def _append_tool_note(self, system_prompt: str) -> str:
+        """Append the tool-calling note to a system prompt.
+
+        Used by the `build_minimal_*_system_prompt` methods to inform the
+        model that additional context is available on demand via the
+        provided tools, since the up-front context passed to these methods
+        is intentionally reduced (see `nlsh.tools.get_minimal_tools`).
+
+        Args:
+            system_prompt: The base system prompt to append the note to.
+
+        Returns:
+            str: The system prompt with the tool-calling note appended.
+        """
+        return system_prompt + _TOOL_CALLING_NOTE
+
+    def build_minimal_system_prompt(self, tools: list[BaseTool], structured: bool = False) -> str:
+        """Build the reduced-context system prompt used when native model
+        tool calling is active for command generation.
+
+        `tools` should be only the cheap up-front tools (see
+        `nlsh.tools.get_minimal_tools`) -- the model is expected to call the
+        provided local tools (directory listing, environment variables,
+        command availability, help pages) on demand instead.
+
+        Args:
+            tools: List of (minimal) tool instances.
+            structured: Whether to build the JSON structured-output variant.
+
+        Returns:
+            str: Formatted, reduced-context system prompt.
+        """
+        return self._append_tool_note(self.build_system_prompt(tools, structured=structured))
+
+    def build_minimal_regeneration_system_prompt(
+        self, tools: list[BaseTool], structured: bool = False
+    ) -> str:
+        """Build the reduced-context system prompt for command regeneration
+        used when native model tool calling is active.
+
+        See `build_minimal_system_prompt` for details on `tools`.
+
+        Args:
+            tools: List of (minimal) tool instances.
+            structured: Whether to build the JSON structured-output variant.
+
+        Returns:
+            str: Formatted, reduced-context system prompt for regeneration.
+        """
+        return self._append_tool_note(
+            self.build_regeneration_system_prompt(tools, structured=structured)
+        )
+
+    def build_minimal_fixing_system_prompt(
+        self, tools: list[BaseTool], structured: bool = False
+    ) -> str:
+        """Build the reduced-context system prompt for fixing failed commands
+        used when native model tool calling is active.
+
+        See `build_minimal_system_prompt` for details on `tools`.
+
+        Args:
+            tools: List of (minimal) tool instances.
+            structured: Whether to build the JSON structured-output variant.
+
+        Returns:
+            str: Formatted, reduced-context system prompt for command fixing.
+        """
+        return self._append_tool_note(
+            self.build_fixing_system_prompt(tools, structured=structured)
+        )
 
     def _gather_tools_context(self, tools: list[BaseTool]) -> str:
         context_parts = []
