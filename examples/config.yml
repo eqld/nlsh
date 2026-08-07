@@ -21,6 +21,17 @@ backends:
     #                   in the prompt instead of enforced by the API).
     #   off:            legacy plain-text behavior, no structured output.
     structured_output: auto    # auto (default) | json_schema | json_object | off
+    # Native model tool calling for command generation/regeneration/fixing
+    # (has no effect on explanations, STDIN processing, or nlgc). When
+    # active, the model can call read-only local tools (list directories,
+    # read whitelisted env vars, resolve binaries, fetch --help/man output)
+    # on demand instead of relying solely on up-front prompt context:
+    #   auto (default): send tools; if the backend rejects the parameter,
+    #                    silently fall back to the current behavior.
+    #   on:              always send tools; error out if rejected (suggests
+    #                    setting this to off).
+    #   off:             legacy behavior, no tool calling.
+    tool_calling: auto    # auto (default) | on | off — let the model fetch context on demand
 
   # OpenAI GPT-4 Vision (supports images)
   - name: "openai-gpt4-vision"

@@ -350,8 +350,16 @@ async def _run_command_generation(
             )
 
         # Log the raw model response (JSON or plain text) as it came from
-        # the model.
-        log(log_file, backend, system_prompt, user_prompt, result.raw_response or result.command)
+        # the model, plus a summary of any tool calls made while generating
+        # it (None when tool calling wasn't used for this request).
+        log(
+            log_file,
+            backend,
+            system_prompt,
+            user_prompt,
+            result.raw_response or result.command,
+            tool_calls=result.tool_calls,
+        )
         return result
     finally:
         if spinner:
@@ -887,7 +895,29 @@ def execute_command(command: str) -> tuple[int, str]:
         signal.signal(signal.SIGINT, previous_handler)
 
 
-def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, response: str):
+def log(
+    log_file: str,
+    backend: LLMBackend,
+    system_prompt: str,
+    prompt: str,
+    response: str,
+    tool_calls: Optional[list] = None,
+):
+    """Append a request/response entry to the log file, if configured.
+
+    Args:
+        log_file: Path to the log file, or falsy to skip logging.
+        backend: Backend that handled the request.
+        system_prompt: System prompt sent to the backend.
+        prompt: User prompt sent to the backend.
+        response: Raw model response (JSON or plain text).
+        tool_calls: Optional list of `{"name", "arguments", "result_chars"}`
+            summaries of local tool invocations made while generating this
+            response (see `CommandResult.tool_calls`). Only lengths of tool
+            results are logged, never their full content. Defaults to None
+            (omitted from the log entry), which is the case for all requests
+            that didn't use native model tool calling.
+    """
     if not log_file:
         return
 
@@ -898,6 +928,8 @@ def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, res
         "system_context": system_prompt,
         "response": response,
     }
+    if tool_calls is not None:
+        log_entry["tool_calls"] = tool_calls
 
     try:
         # Create directory if it doesn't exist
