@@ -51,7 +51,7 @@ class EmptyCommitMessageError(NlgcError):
 
 
 FILE_CONTENT_HEADER = "Full content of changed files:"
-GIT_COMMIT_MESSAGE_MAX_TOKENS = 150
+GIT_COMMIT_MESSAGE_MAX_TOKENS = 300
 
 
 def parse_args(args: list[str]) -> argparse.Namespace:
