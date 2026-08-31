@@ -1,103 +1,162 @@
-# Neural Shell (nlsh) Configuration
+# Neural Shell (nlsh) — configuration reference
+#
+# Copy this file to ~/.nlsh/config.yml (or ~/.config/nlsh/config.yml) and edit
+# it. Every supported key is documented below with its purpose, default and
+# allowed values. Keys shown commented out are optional and fall back to the
+# documented default.
+#
+# Lookup order for the config file:
+#   1. the path passed to --config
+#   2. ~/.nlsh/config.yml
+#   3. ~/.config/nlsh/config.yml
 
-# Shell to use for command generation
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+
+# Shell used for generated commands.
+# Default: bash. Allowed: bash, zsh, fish, powershell.
 # Override with environment variable: NLSH_SHELL
-shell: "bash"  # Options: bash, zsh, fish, powershell
+shell: "bash"
 
-# LLM Backends
+# ---------------------------------------------------------------------------
+# LLM backends
+#
+# Any OpenAI-compatible endpoint works. The list order defines the CLI flags:
+# the first entry is `nlsh -0`, the second `nlsh -1`, and so on (up to -9).
+#
+# Required per backend: name, url, model.
+# Everything else is optional and defaults as documented.
+# ---------------------------------------------------------------------------
 backends:
-  # OpenAI API (text-only)
+  # Backend 0 — full-featured entry showing every supported key.
   - name: "openai"
+    # Required. Used in error messages and enables the <NAME>_API_KEY env var
+    # (here: OPENAI_API_KEY) as an override for this backend's api_key.
     url: "https://api.openai.com/v1"
-    api_key: $OPENAI_API_KEY   # Will be replaced with environment variable
-    model: "gpt-3.5-turbo"     # Or gpt-4, etc.
-    supports_vision: false     # This model doesn't support image processing
-    # Structured JSON output mode for command generation/regeneration/fixing
-    # (has no effect on explanations, STDIN processing, or nlgc):
+    # Required. Base URL of the OpenAI-compatible API.
+    model: "gpt-4o-mini"
+    # Required. Model name as the endpoint expects it.
+    api_key: $OPENAI_API_KEY
+    # Literal key, or "$VAR" to read it from that environment variable.
+    # Default: "" (empty). Non-local endpoints require a key of 8+ characters.
+    timeout: 120.0
+    # Request timeout in seconds. Must be positive.
+    # Default: 120.0, or 300.0 when url points at localhost/127.0.0.1/::1/unix://.
+    is_reasoning_model: false
+    # Set true for reasoning models so `-v` streams their reasoning tokens.
+    # Default: false (auto-enabled when the backend name contains "reason").
+    supports_vision: false
+    # Set true for vision-capable models; required to process image STDIN input.
+    # Default: false.
+    max_image_size_mb: 20.0
+    # Maximum accepted image size in MB (only relevant with supports_vision).
+    # Must be positive. Default: 20.0.
+    structured_output: auto
+    # Ask the model for JSON {command, danger_level} instead of a bare command,
+    # which enables the "potentially destructive" warning before execution.
+    # Applies to command generation/regeneration/fixing only — never to
+    # explanations, STDIN processing or nlgc.
     #   auto (default): try json_schema, then json_object, then fall back to
-    #                    plain text if the backend doesn't support it.
-    #   json_schema:    always request strict JSON-schema-validated output.
-    #   json_object:    always request a plain JSON object (schema described
-    #                   in the prompt instead of enforced by the API).
-    #   off:            legacy plain-text behavior, no structured output.
-    structured_output: auto    # auto (default) | json_schema | json_object | off
-    # Native model tool calling for command generation/regeneration/fixing
-    # (has no effect on explanations, STDIN processing, or nlgc). When
-    # active, the model can call read-only local tools (list directories,
-    # read whitelisted env vars, resolve binaries, fetch --help/man output)
-    # on demand instead of relying solely on up-front prompt context:
-    #   auto (default): send tools; if the backend rejects the parameter,
-    #                    silently fall back to the current behavior.
-    #   on:              always send tools; error out if rejected (suggests
-    #                    setting this to off).
-    #   off:             legacy behavior, no tool calling.
-    tool_calling: auto    # auto (default) | on | off — let the model fetch context on demand
+    #                   plain text if the backend supports neither.
+    #   json_schema:    always request strict, schema-validated JSON.
+    #   json_object:    always request a plain JSON object (schema described in
+    #                   the prompt instead of enforced by the API).
+    #   off:            never request structured output (plain-text behavior).
+    # Default: auto. Allowed: auto, json_schema, json_object, off.
+    tool_calling: auto
+    # Let the model call local read-only tools (list_directory, read_env_var,
+    # which, help_snippet, man_summary) to fetch context on demand instead of
+    # receiving all of it up front. Same scope as structured_output above.
+    #   auto (default): offer tools; silently fall back if the backend rejects
+    #                   the `tools` parameter.
+    #   on:             always offer tools; error out if rejected (the error
+    #                   suggests setting this to off).
+    #   off:            never offer tools; always send the full up-front context.
+    # Default: auto. Allowed: auto, on, off.
 
-  # OpenAI GPT-4 Vision (supports images)
+  # Backend 1 — vision-capable, referenced by stdin.default_backend_vision below.
   - name: "openai-gpt4-vision"
     url: "https://api.openai.com/v1"
-    api_key: $OPENAI_API_KEY   # Will be replaced with environment variable
-    model: "gpt-4-vision-preview"  # Vision-capable model
-    supports_vision: true      # This model supports image processing
-    max_image_size_mb: 20.0    # Maximum image size in MB for this backend
+    model: "gpt-4o"
+    api_key: $OPENAI_API_KEY
+    supports_vision: true      # Required to accept images from STDIN
+    max_image_size_mb: 20.0
 
-  # Local Ollama
+  # Backend 2 — minimal local Ollama entry (no real API key required).
   - name: "local-ollama"
     url: "http://localhost:11434/v1"
-    api_key: "ollama"          # Ollama doesn't require an API key
-    model: "llama3"            # Or any other model you have in Ollama
-    supports_vision: false     # Most Ollama models don't support vision
+    model: "llama3"
+    api_key: "ollama"          # Placeholder; local endpoints send no auth header
 
-  # Local Ollama with LLaVA (vision model)
-  - name: "local-llava"
-    url: "http://localhost:11434/v1"
-    api_key: "ollama"          # Ollama doesn't require an API key
-    model: "llava"             # Vision-capable model
-    supports_vision: true      # This model supports image processing
-    max_image_size_mb: 10.0    # Smaller limit for local models
-
-  # DeepSeek reasoner (reasoning model)
+  # Backend 3 — reasoning model.
   - name: "deepseek-reasoner"
     url: "https://api.deepseek.com/v1"
-    api_key: $DEEPSEEK_API_KEY # Will be replaced with environment variable
     model: "deepseek-reasoner"
-    is_reasoning_model: true   # This flag is required to be able to display reasoning tokens in verbose mode
-    supports_vision: false     # This model doesn't support image processing
+    api_key: $DEEPSEEK_API_KEY
+    is_reasoning_model: true   # Enables reasoning-token output in verbose mode
 
-# Default backend to use (index in the backends list, starting from 0)
+  # Backend 4 (example) — local vision model. Uncomment to enable.
+  # - name: "local-llava"
+  #   url: "http://localhost:11434/v1"
+  #   model: "llava"
+  #   api_key: "ollama"
+  #   supports_vision: true
+  #   max_image_size_mb: 10.0   # Smaller limit for local models
+
+  # Backend 5 (example) — endpoint behind a proxy that mangles response_format
+  # and does not implement function calling. Uncomment to enable.
+  # - name: "picky-proxy"
+  #   url: "https://proxy.example.com/v1"
+  #   model: "some-model"
+  #   api_key: $PROXY_API_KEY
+  #   structured_output: off
+  #   tool_calling: off
+
+# Backend used when no -0..-9 flag is given (index into the list above).
+# Default: 0.
 # Override with environment variable: NLSH_DEFAULT_BACKEND
 default_backend: 0
 
-# STDIN processing configuration
-# Override with environment variables: NLSH_STDIN_DEFAULT_BACKEND, NLSH_STDIN_DEFAULT_BACKEND_VISION, NLSH_STDIN_MAX_TOKENS
+# ---------------------------------------------------------------------------
+# STDIN processing (`cat file | nlsh <instruction>`)
+#
+# Optional section. Override with environment variables:
+#   NLSH_STDIN_DEFAULT_BACKEND, NLSH_STDIN_DEFAULT_BACKEND_VISION,
+#   NLSH_STDIN_MAX_TOKENS
+# ---------------------------------------------------------------------------
 stdin:
-  # Default backend for text STDIN processing (optional)
-  # Falls back to global default_backend if not specified
+  # Backend for text STDIN processing.
+  # Default: null (falls back to the global default_backend).
   default_backend: 0
-  
-  # Default backend for image STDIN processing (optional)
-  # Falls back to stdin.default_backend or global default_backend if not specified
-  # Should point to a backend with supports_vision: true
+
+  # Backend for image STDIN processing. Should point at a backend with
+  # supports_vision: true.
+  # Default: null (falls back to stdin.default_backend, then default_backend).
   default_backend_vision: 1
-  
-  # Maximum output tokens for STDIN processing
-  # Can be overridden with --max-tokens command line flag
+
+  # Maximum output tokens in STDIN mode. Must be a positive integer.
+  # Default: 2000. Overridden by the --max-tokens flag.
   max_tokens: 2000
 
-# Configuration for the 'nlgc' (Neural Git Commit) command
-# Override with environment variables: NLSH_NLGC_INCLUDE_FULL_FILES (true/false), NLSH_NLGC_LANGUAGE, NLSH_NLGC_DEFAULT_BACKEND
+# ---------------------------------------------------------------------------
+# nlgc (Neural Git Commit)
+#
+# Optional section. Override with environment variables:
+#   NLSH_NLGC_INCLUDE_FULL_FILES (true/false), NLSH_NLGC_LANGUAGE,
+#   NLSH_NLGC_DEFAULT_BACKEND
+# ---------------------------------------------------------------------------
 nlgc:
-  # Whether to include the full content of changed files in the prompt
-  # sent to the LLM for commit message generation. Provides more context
-  # but increases token usage significantly.
+  # Include the full content of changed files in the prompt, not just the diff.
+  # More context, significantly more tokens. Must be a boolean.
+  # Default: true. Overridden by --full-files / --no-full-files.
   include_full_files: true
-  
-  # Language for commit message generation (e.g., "Spanish", "French", "German")
-  # Set to null or omit for default behavior (English)
-  # Can be overridden with --language/-l flag or NLSH_NLGC_LANGUAGE env var
+
+  # Language for generated commit messages, e.g. "Spanish", "French", "German".
+  # Must be null or a non-empty string.
+  # Default: null (English). Overridden by --language/-l.
   language: null
-  
-  # Default backend for nlgc (optional)
-  # Falls back to global default_backend if not specified
-  # Can be overridden with NLSH_NLGC_DEFAULT_BACKEND env var
+
+  # Backend used by nlgc. Must be a non-negative integer or null.
+  # Default: null (falls back to the global default_backend).
   default_backend: null
