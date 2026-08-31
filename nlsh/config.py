@@ -129,8 +129,8 @@ class Config:
         # Validate shell
         if not isinstance(config.get("shell"), str):
             raise ConfigValidationError("Shell must be a string")
-        if config["shell"] not in ["bash", "zsh", "fish", "powershell"]:
-            raise ConfigValidationError("Shell must be one of: bash, zsh, fish, powershell")
+        if config["shell"] not in ["bash", "zsh", "fish"]:
+            raise ConfigValidationError("Shell must be one of: bash, zsh, fish")
 
         # Validate backends
         if not isinstance(config.get("backends"), list):

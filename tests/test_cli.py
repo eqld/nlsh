@@ -173,7 +173,7 @@ class TestRegenerateFlow:
 class TestExecuteCommand:
     """`execute_command` is the function under test here, so real (harmless,
     portable) subprocess execution is permitted -- this is the one exception
-    to the "mock all subprocess calls" rule, per the phase plan."""
+    to the "mock all subprocess calls" rule."""
 
     def test_successful_command_returns_zero_and_output(self):
         code, output = cli.execute_command("echo hello")

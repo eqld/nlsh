@@ -1,7 +1,7 @@
 """Tests for nlsh/git_commit.py (the nlgc entry point).
 
-Git operations run against real, hermetic temp repositories (allowed per the
-phase plan -- local and isolated from the developer's real gitconfig via
+Git operations run against real, hermetic temp repositories (local and
+isolated from the developer's real gitconfig via
 GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM=/dev/null and explicit GIT_AUTHOR_*/
 GIT_COMMITTER_* env vars). All OpenAI/backend calls are mocked.
 """
@@ -215,7 +215,7 @@ class TestPrepareGitData:
 
 def _patch_backend_manager(monkeypatch, response_content=None, side_effect=None):
     """Patch git_commit.BackendManager to return a fake backend whose
-    generate_response is an AsyncMock, per the phase plan."""
+    generate_response is an AsyncMock."""
     fake_backend = SimpleNamespace(name="test-backend", model="test-model", url="http://x")
     if side_effect is not None:
         fake_backend.generate_response = AsyncMock(side_effect=side_effect)

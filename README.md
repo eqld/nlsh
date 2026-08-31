@@ -13,7 +13,7 @@ Configure multiple OpenAI-compatible endpoints (e.g., local Ollama, DeepSeek API
 * 🧠 **System-Aware Context**\
 Automatically gathers information about your environment (OS, architecture, date/time, shell, available CLI tools, current directory) to generate commands tailored to your system. Only a whitelisted set of environment variables is ever sent to the LLM.
 * 🐚 **Shell-Aware Generation**\
-Set your shell (bash/zsh/fish/powershell) via config/env to ensure syntax compatibility.
+Set your shell (bash/zsh/fish) via config/env to ensure syntax compatibility.
 * 🛡️ **Safety First**\
 Never executes commands automatically, works in interactive confirmation mode.
 * 🧩 **Structured Output**\
@@ -347,7 +347,7 @@ A complete, self-documenting reference config ships with the repository at [`exa
 
 ```yaml
 # Shell used for generated commands. Default: bash.
-# Allowed: bash, zsh, fish, powershell. Override with env $NLSH_SHELL.
+# Allowed: bash, zsh, fish. Override with env $NLSH_SHELL.
 shell: "zsh"
 
 backends:

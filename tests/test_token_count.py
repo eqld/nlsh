@@ -20,7 +20,7 @@ from nlsh.token_count import (
 def _require_cl100k_base():
     """tiktoken downloads/caches encodings on first use. Skip gracefully if
     the encoding cannot be loaded (e.g. fully offline CI without a
-    pre-warmed cache), per the phase plan's guidance."""
+    pre-warmed cache)."""
     try:
         tiktoken.get_encoding("cl100k_base")
     except Exception as e:  # pragma: no cover - environment dependent

@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------------
 
 # Shell used for generated commands.
-# Default: bash. Allowed: bash, zsh, fish, powershell.
+# Default: bash. Allowed: bash, zsh, fish.
 # Override with environment variable: NLSH_SHELL
 shell: "bash"
 
