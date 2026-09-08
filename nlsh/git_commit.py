@@ -99,12 +99,17 @@ def parse_args(args: list[str]) -> argparse.Namespace:
         help="Force exclusion of full file contents from the prompt (overrides config).",
     )
 
-    # Optional arguments for git diff (e.g., --all for unstaged changes)
+    # Optional arguments for git diff (e.g., --all for unstaged changes).
+    # NOTE: this widens the *analysis* only. The commit is always performed as
+    # `git commit -m <message>`, so only staged changes are ever committed.
     parser.add_argument(
         "--all",
         "-a",
         action="store_true",
-        help="Consider all tracked files, not just staged changes.",
+        help=(
+            "Analyze all tracked modified files, not just staged changes. "
+            "Only staged changes are committed."
+        ),
     )
 
     # Language for commit message generation
@@ -468,8 +473,13 @@ def _prepare_git_data(args, include_full_files):
 
 
 def _generate_and_confirm_message(
-    config, args, git_diff, changed_files_content, declined_messages=None, language=None
-):
+    config: Config,
+    args: argparse.Namespace,
+    git_diff: str,
+    changed_files_content: Optional[dict[str, str]],
+    declined_messages: Optional[list[str]] = None,
+    language: Optional[str] = None,
+) -> tuple[bool, int]:
     """Generate and confirm a commit message.
 
     Args:
@@ -569,7 +579,7 @@ def _main(config: Config, args: argparse.Namespace) -> int:
         return 1
 
     # Generate and confirm commit message
-    declined_messages = []
+    declined_messages: list[str] = []
     while True:
         try:
             done, exit_code = _generate_and_confirm_message(
@@ -617,6 +627,11 @@ def main() -> None:
 
         exit_code = _main(config, args)
 
+    except SystemExit:
+        # Propagate explicit exits untouched: argparse uses 0 for --help and 2
+        # for a usage error, and the --init path above exits 0 on success. These
+        # must not be rewritten to the generic failure code below.
+        raise
     except (ConfigValidationError, GitCommandError, NlgcError, ValueError) as e:
         # Catch known errors that might occur during config loading or async execution
         print(f"Error: {str(e)}", file=sys.stderr)
@@ -631,8 +646,8 @@ def main() -> None:
         if args is not None and args.verbose > 1:
             traceback.print_exc(file=sys.stderr)
         exit_code = 1
-    finally:
-        sys.exit(exit_code)
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

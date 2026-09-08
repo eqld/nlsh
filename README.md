@@ -761,7 +761,7 @@ A `Makefile` wraps the common tasks: `make install-dev`, `make test`, `make cove
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes to `main`/`master` and on every pull request:
 
-* **lint** job: `ruff check nlsh/` and `black --check nlsh/` on Python 3.12.
+* **lint** job: `ruff check nlsh/`, `black --check nlsh/` and `mypy nlsh/` on Python 3.12, using the tool versions pinned in `requirements-dev.txt`.
 * **test** job: installs `requirements-dev.txt` and runs `pytest -q` on a matrix of Ubuntu and macOS × Python 3.9–3.14.
 
 Releases are published to PyPI by [`.github/workflows/python-publish.yml`](.github/workflows/python-publish.yml) when a GitHub release is created.

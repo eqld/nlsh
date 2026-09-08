@@ -4,6 +4,7 @@ import os
 
 from nlsh.tools import get_minimal_tools, get_tools
 from nlsh.tools.availability import ToolAvailability
+from nlsh.tools.common import format_size
 from nlsh.tools.directory import DirLister
 from nlsh.tools.environment import EnvInspector
 from nlsh.tools.system import SystemInfo
@@ -30,6 +31,28 @@ class TestEnvInspector:
         shown_lines = [line for line in ctx.splitlines() if line.startswith("- /fake/path/")]
         assert len(shown_lines) == EnvInspector.MAX_PATH_ENTRIES
         assert "200 total" in ctx
+
+
+class TestFormatSize:
+    """`format_size` must always return a str.
+
+    Regression test: the unit loop had no fallback `return`, so any input that
+    fell through (e.g. a negative size) yielded None, which callers then
+    interpolated into their output as the literal "None".
+    """
+
+    def test_common_sizes_formatted(self):
+        assert format_size(0) == "0.00 B"
+        assert format_size(512) == "512.00 B"
+        assert format_size(2048) == "2.00 KB"
+        assert format_size(5 * 1024**2) == "5.00 MB"
+        assert format_size(3 * 1024**4) == "3.00 TB"
+
+    def test_never_returns_none(self):
+        for value in (-1, -1024, 0, 1, 1024**5, 1024**6):
+            result = format_size(value)
+            assert isinstance(result, str), f"format_size({value}) returned {result!r}"
+            assert "None" not in result
 
 
 class TestDirLister:

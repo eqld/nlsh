@@ -12,10 +12,9 @@ which have different security requirements.
 """
 
 import os
-from typing import List
 
 
-def scan_visible_entries(path: str) -> List["os.DirEntry"]:
+def scan_visible_entries(path: str) -> list["os.DirEntry"]:
     """Scan a directory and return non-hidden entries.
 
     Args:
@@ -32,7 +31,7 @@ def scan_visible_entries(path: str) -> List["os.DirEntry"]:
         return [e for e in it if not e.name.startswith(".")]
 
 
-def format_size(size_bytes) -> str:
+def format_size(size_bytes: float) -> str:
     """Format a byte count in a human-readable form (e.g. ``1.20 KB``).
 
     Args:
@@ -45,9 +44,12 @@ def format_size(size_bytes) -> str:
         if size_bytes < 1024 or unit == "TB":
             return f"{size_bytes:.2f} {unit}"
         size_bytes /= 1024
+    # Unreachable in practice (the loop always returns at "TB"), but keeps the
+    # return type honest so callers never interpolate ``None`` into output.
+    return f"{size_bytes:.2f} TB"
 
 
-def format_path_entries(max_entries: int, bullet: str = "") -> List[str]:
+def format_path_entries(max_entries: int, bullet: str = "") -> list[str]:
     """Format a capped, human-readable preview of the ``PATH`` variable.
 
     Args:

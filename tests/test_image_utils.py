@@ -117,3 +117,7 @@ class TestGetBackendImageSizeLimit:
 
     def test_explicit_value(self):
         assert get_backend_image_size_limit({"max_image_size_mb": 5.0}) == 5.0
+
+    def test_none_config_falls_back_to_default(self):
+        """config.get_backend() may return None; the default must be used."""
+        assert get_backend_image_size_limit(None) == 20.0

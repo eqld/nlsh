@@ -93,8 +93,8 @@ Testing conventions:
 Before opening a PR:
 
 1. `pytest -q` passes.
-2. `ruff check nlsh/` and `black --check nlsh/` are clean for the code you touched.
-3. `mypy nlsh/` does not report new errors for the code you touched.
+2. `ruff check nlsh/` and `black --check nlsh/` are clean.
+3. `mypy nlsh/` is clean (it currently reports no errors — please keep it that way).
 4. New behavior is covered by tests.
 5. User-visible changes are reflected in `README.md`, `examples/config.yml`
    (if a config key changed) and `CHANGELOG.md` under `## [Unreleased]`.
@@ -104,8 +104,9 @@ Please keep commits focused and write messages in the
 repository (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, …) —
 `nlgc` can generate them for you.
 
-Continuous integration (`.github/workflows/ci.yml`) runs ruff and black on
-Python 3.12, and `pytest -q` on Ubuntu and macOS across Python 3.9–3.14.
+Continuous integration (`.github/workflows/ci.yml`) runs ruff, black and mypy on
+Python 3.12 (with the tool versions pinned in `requirements-dev.txt`), and
+`pytest -q` on Ubuntu and macOS across Python 3.9–3.14.
 
 ## Releases
 

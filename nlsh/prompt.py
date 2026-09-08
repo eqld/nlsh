@@ -4,6 +4,8 @@ Prompt engineering for nlsh.
 This module provides functionality for constructing prompts for LLMs.
 """
 
+from typing import Optional
+
 from nlsh.tools.base import BaseTool
 
 # Shared "strict output rules" block for shell-command-generating prompts
@@ -96,10 +98,7 @@ class PromptBuilder:
         "You are a command-line assistant. A previously suggested {shell} command failed. "
         "Analyze the failed command, its exit code and output, then generate a corrected "
         "single {shell} command (or a different command that accomplishes the original "
-        "intent).\n\n"
-        + _COMMAND_OUTPUT_RULES
-        + "\n\n"
-        + _SYSTEM_CONTEXT_SECTION
+        "intent).\n\n" + _COMMAND_OUTPUT_RULES + "\n\n" + _SYSTEM_CONTEXT_SECTION
     )
 
     # JSON structured-output variant of FIXING_SYSTEM_PROMPT.
@@ -107,10 +106,7 @@ class PromptBuilder:
         "You are a command-line assistant. A previously suggested {shell} command failed. "
         "Analyze the failed command, its exit code and output, then generate a corrected "
         "single {shell} command (or a different command that accomplishes the original "
-        "intent).\n\n"
-        + _COMMAND_OUTPUT_RULES_JSON
-        + "\n\n"
-        + _SYSTEM_CONTEXT_SECTION
+        "intent).\n\n" + _COMMAND_OUTPUT_RULES_JSON + "\n\n" + _SYSTEM_CONTEXT_SECTION
     )
 
     # Explanation system prompt template
@@ -139,9 +135,7 @@ Formatting rules:
     GIT_COMMIT_SYSTEM_PROMPT = (
         "You are an assistant that writes git commit messages following the Conventional "
         "Commits standard (feat:, fix:, docs:, refactor:, test:, chore:, perf:, build:, "
-        "ci:).\n\n"
-        + _GIT_COMMIT_RULES
-        + "\n{language_instruction}\n"
+        "ci:).\n\n" + _GIT_COMMIT_RULES + "\n{language_instruction}\n"
     )
 
     # Git commit regeneration system prompt template
@@ -260,9 +254,7 @@ RULES:
         Returns:
             str: Formatted, reduced-context system prompt for command fixing.
         """
-        return self._append_tool_note(
-            self.build_fixing_system_prompt(tools, structured=structured)
-        )
+        return self._append_tool_note(self.build_fixing_system_prompt(tools, structured=structured))
 
     def _gather_tools_context(self, tools: list[BaseTool]) -> str:
         context_parts = []
@@ -315,7 +307,7 @@ RULES:
             system_context=system_context,
         )
 
-    def build_git_commit_system_prompt(self, language: str = None) -> str:
+    def build_git_commit_system_prompt(self, language: Optional[str] = None) -> str:
         """Build the system prompt for git commit message generation.
 
         Args:
@@ -397,7 +389,7 @@ Please provide a fixed version of this command or a completely different command
         return user_prompt
 
     def build_git_commit_user_prompt(
-        self, git_diff: str, changed_files_content: dict = None
+        self, git_diff: str, changed_files_content: Optional[dict] = None
     ) -> str:
         """Build the user prompt for commit message generation.
 
@@ -440,7 +432,9 @@ Please provide a fixed version of this command or a completely different command
         """
         return f"Task: {user_prompt}\n\nINPUT_START\n{stdin_content}\nINPUT_END"
 
-    def build_regeneration_system_prompt(self, tools: list[BaseTool], structured: bool = False) -> str:
+    def build_regeneration_system_prompt(
+        self, tools: list[BaseTool], structured: bool = False
+    ) -> str:
         """Build the system prompt for command regeneration with context from tools.
 
         Args:
@@ -455,10 +449,10 @@ Please provide a fixed version of this command or a completely different command
         system_context = self._gather_tools_context(tools)
 
         # Format the regeneration prompt with shell and system context
-        template = self.REGENERATION_SYSTEM_PROMPT_JSON if structured else self.REGENERATION_SYSTEM_PROMPT
-        return template.format(
-            shell=self.shell, system_context=system_context
+        template = (
+            self.REGENERATION_SYSTEM_PROMPT_JSON if structured else self.REGENERATION_SYSTEM_PROMPT
         )
+        return template.format(shell=self.shell, system_context=system_context)
 
     def build_regeneration_user_prompt(
         self, original_request: str, declined_commands: list[dict]
@@ -493,7 +487,7 @@ Please provide a fixed version of this command or a completely different command
 
         return prompt
 
-    def build_git_commit_regeneration_system_prompt(self, language: str = None) -> str:
+    def build_git_commit_regeneration_system_prompt(self, language: Optional[str] = None) -> str:
         """Build the system prompt for git commit message regeneration.
 
         Args:
@@ -513,7 +507,7 @@ Please provide a fixed version of this command or a completely different command
     def build_git_commit_regeneration_user_prompt(
         self,
         git_diff: str,
-        changed_files_content: dict = None,
+        changed_files_content: Optional[dict] = None,
         declined_messages: list[str] = [],  # noqa: B006
     ) -> str:
         """Build the user prompt for git commit message regeneration.

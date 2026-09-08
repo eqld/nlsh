@@ -7,6 +7,7 @@ GIT_COMMITTER_* env vars). All OpenAI/backend calls are mocked.
 """
 
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -99,9 +100,7 @@ class TestGetGitDiff:
     def test_all_flag_sees_unstaged_changes_too(self, git_repo):
         path = git_repo / "bar.txt"
         stage_file(git_repo, "bar.txt", "unstaged\n")
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "add bar"], cwd=str(git_repo), check=True
-        )
+        subprocess.run(["git", "commit", "-q", "-m", "add bar"], cwd=str(git_repo), check=True)
         path.write_text("modified\n")
         diff_all = get_git_diff(staged=False)
         assert "bar.txt" in diff_all
@@ -187,25 +186,19 @@ class TestPrepareGitData:
 
     def test_include_full_files_false_returns_no_file_dict(self, git_repo):
         stage_file(git_repo, "foo.txt", "hello\n")
-        git_diff, changed_files_content = _prepare_git_data(
-            self._args(), include_full_files=False
-        )
+        git_diff, changed_files_content = _prepare_git_data(self._args(), include_full_files=False)
         assert "foo.txt" in git_diff
         assert changed_files_content is None
 
     def test_include_full_files_true_returns_file_dict(self, git_repo):
         stage_file(git_repo, "foo.txt", "hello content\n")
-        _git_diff, changed_files_content = _prepare_git_data(
-            self._args(), include_full_files=True
-        )
+        _git_diff, changed_files_content = _prepare_git_data(self._args(), include_full_files=True)
         assert changed_files_content == {"foo.txt": "hello content\n"}
 
     def test_large_file_is_truncated(self, git_repo, capsys):
         big_content = "x" * (100 * 1024 + 500)
         stage_file(git_repo, "big.txt", big_content)
-        _git_diff, changed_files_content = _prepare_git_data(
-            self._args(), include_full_files=True
-        )
+        _git_diff, changed_files_content = _prepare_git_data(self._args(), include_full_files=True)
         truncated = changed_files_content["big.txt"]
         assert truncated.endswith("\n... [TRUNCATED]")
         assert len(truncated) == 100 * 1024 + len("\n... [TRUNCATED]")
@@ -286,3 +279,67 @@ class TestGenerateCommitMessageRegeneration:
             generate_commit_message_regeneration(
                 config, None, "diff content", None, declined_messages=["x"], verbose=True
             )
+
+
+class TestParseArgs:
+    def test_all_flag_help_states_only_staged_is_committed(self, monkeypatch, capsys):
+        """--all widens analysis only; the help text must say so.
+
+        run_git_commit always runs `git commit -m <msg>` (no -a), so the help
+        must not imply that unstaged changes get committed.
+        """
+        monkeypatch.setattr(sys, "argv", ["nlgc", "--help"])
+        with pytest.raises(SystemExit):
+            git_commit.parse_args(["--help"])
+        help_text = capsys.readouterr().out
+        assert "Only staged changes are committed." in help_text
+
+    def test_all_flag_sets_namespace(self):
+        assert git_commit.parse_args(["--all"]).all is True
+        assert git_commit.parse_args(["-a"]).all is True
+        assert git_commit.parse_args([]).all is False
+
+
+class TestMainExitCodes:
+    """`nlgc` must not rewrite explicit exit codes to the generic failure code.
+
+    Regression test: `main()` used to end in `finally: sys.exit(exit_code)`
+    with `exit_code` defaulting to 1, which swallowed argparse's SystemExit(0)
+    for --help and SystemExit(2) for a usage error, and the --init success
+    path's SystemExit(0).
+    """
+
+    def test_help_exits_zero(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["nlgc", "--help"])
+        with pytest.raises(SystemExit) as exc:
+            git_commit.main()
+        assert exc.value.code == 0
+        assert "usage:" in capsys.readouterr().out
+
+    def test_unknown_flag_exits_two(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["nlgc", "--definitely-not-a-flag"])
+        with pytest.raises(SystemExit) as exc:
+            git_commit.main()
+        assert exc.value.code == 2
+
+    def test_init_exits_zero_and_creates_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "argv", ["nlgc", "--init"])
+        with pytest.raises(SystemExit) as exc:
+            git_commit.main()
+        assert exc.value.code == 0
+        # isolated_env points HOME at tmp_path, so this is the real created file.
+        assert (tmp_path / ".nlsh" / "config.yml").exists()
+
+    def test_error_path_still_exits_one(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["nlgc"])
+        monkeypatch.setattr(git_commit, "_main", MagicMock(side_effect=GitCommandError("boom")))
+        with pytest.raises(SystemExit) as exc:
+            git_commit.main()
+        assert exc.value.code == 1
+
+    def test_success_path_exits_with_main_result(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["nlgc"])
+        monkeypatch.setattr(git_commit, "_main", MagicMock(return_value=0))
+        with pytest.raises(SystemExit) as exc:
+            git_commit.main()
+        assert exc.value.code == 0

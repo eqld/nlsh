@@ -8,7 +8,7 @@ import re
 import sys
 import traceback
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import openai
 
@@ -18,6 +18,9 @@ from nlsh.structured import (
     build_response_format,
     parse_command_response,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import for type checking only
+    from nlsh.config import Config
 
 
 def strip_markdown_code_blocks(text: str) -> str:
@@ -202,10 +205,14 @@ class LLMBackend:
         full_response = ""
         sys.stderr.write("Reasoning: ")
 
-        # Call the API with streaming
+        # Call the API with streaming.
+        # `messages` is built as plain dicts rather than the SDK's
+        # ChatCompletion*Param TypedDicts (they are not expressible for the
+        # dynamic system/user/tool mix used here), so the argument type and the
+        # stream=True overload are both narrowed by hand.
         stream = await self.client.chat.completions.create(
             model=self.model,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
             temperature=temperature,
             max_tokens=max_tokens,
             n=1,
@@ -213,7 +220,7 @@ class LLMBackend:
         )
 
         # Process the stream
-        async for chunk in stream:
+        async for chunk in stream:  # type: ignore[union-attr]
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta
 
@@ -256,14 +263,24 @@ class LLMBackend:
         Returns:
             str: Generated response.
         """
-        # Call the API without streaming
+        # Call the API without streaming (see the note in
+        # _generate_streaming_response about the plain-dict `messages` type).
         response = await self.client.chat.completions.create(
-            model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens, n=1
+            model=self.model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=temperature,
+            max_tokens=max_tokens,
+            n=1,
         )
 
-        # Extract and process the content
+        # Extract and process the content. `content` is Optional in the API
+        # schema (e.g. when a model returns only tool calls or is filtered),
+        # so guard against None instead of calling .strip() on it directly.
         if response.choices and len(response.choices) > 0:
-            content = response.choices[0].message.content.strip()
+            raw_content = response.choices[0].message.content
+            if raw_content is None:
+                return "Error: No response generated"
+            content = raw_content.strip()
 
             if strip_markdown:
                 return strip_markdown_code_blocks(content)
@@ -299,8 +316,9 @@ class LLMBackend:
             str: Generated response.
         """
         try:
-            # Create messages for the chat completion
-            messages = [{"role": "system", "content": system_context}]
+            # Create messages for the chat completion. Values are Any because
+            # a vision user message carries a list of content parts, not a str.
+            messages: list[dict[str, Any]] = [{"role": "system", "content": system_context}]
 
             # Handle image input for vision models
             if image_data and image_mime_type:
@@ -313,7 +331,7 @@ class LLMBackend:
                 base64_image, mime_type = prepare_image_for_api(image_data, image_mime_type)
 
                 # Create user message with image
-                user_message = {
+                user_message: dict[str, Any] = {
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
@@ -397,7 +415,10 @@ class LLMBackend:
         response_format = build_response_format(mode)
 
         try:
-            response = await self.client.chat.completions.create(
+            # Plain-dict messages + an optional response_format dict (see the
+            # note in _generate_streaming_response) do not match any of the
+            # SDK's create() overloads, so the whole call is narrowed by hand.
+            response = await self.client.chat.completions.create(  # type: ignore[call-overload]
                 model=self.model,
                 messages=messages,
                 temperature=temperature,
@@ -820,9 +841,7 @@ class LLMBackend:
                             "result_chars": len(result),
                         }
                     )
-                    messages.append(
-                        {"role": "tool", "tool_call_id": tc.id, "content": result}
-                    )
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
                 continue
 
             return _parse(message.content)
@@ -861,20 +880,21 @@ class LLMBackend:
         Returns:
             bool: True if backend supports vision.
         """
-        return self.config.get("supports_vision", False)
+        return bool(self.config.get("supports_vision", False))
 
 
 class BackendManager:
     """Manager for LLM backends."""
 
-    def __init__(self, config):
+    def __init__(self, config: "Config"):
         """Initialize the backend manager.
 
         Args:
             config: Configuration object.
         """
         self.config = config
-        self.backends = {}
+        # Keyed by f"{backend_name}_{index}" (see get_backend).
+        self.backends: dict[str, LLMBackend] = {}
 
     def get_backend(self, index: Optional[int] = None) -> LLMBackend:
         """Get a backend instance.
@@ -917,8 +937,8 @@ class BackendManager:
                 return self.get_backend(preferred_index)
 
         # Find first vision-capable backend
-        for i, backend_config in enumerate(self.config.config["backends"]):
-            if backend_config.get("supports_vision", False):
+        for i, candidate_config in enumerate(self.config.config["backends"]):
+            if candidate_config.get("supports_vision", False):
                 return self.get_backend(i)
 
         # No vision-capable backend found

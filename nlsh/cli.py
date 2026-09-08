@@ -90,9 +90,9 @@ def _should_attempt_tools(backend: LLMBackend, verbose: bool) -> bool:
         return False
     if backend.tool_calling == "off":
         return False
-    if backend.tools_supported is False:
-        return False
-    return True
+    # `tools_supported` is tri-state: None (not probed yet) and True both mean
+    # "worth offering tools"; only an explicit False disables them.
+    return backend.tools_supported is not False
 
 
 def _check_stdin_input() -> Optional[tuple[bytes, str]]:
@@ -472,7 +472,9 @@ async def generate_command_regeneration(
     else:
         system_prompt = prompt_builder.build_regeneration_system_prompt(tools)
         structured_system_prompt = (
-            None if verbose else prompt_builder.build_regeneration_system_prompt(tools, structured=True)
+            None
+            if verbose
+            else prompt_builder.build_regeneration_system_prompt(tools, structured=True)
         )
     user_prompt = prompt_builder.build_regeneration_user_prompt(original_request, declined_commands)
     regeneration_count = len(declined_commands)
@@ -842,9 +844,15 @@ def execute_command(command: str) -> tuple[int, str]:
             errors="replace",  # Replace invalid characters
         )
 
+        # Both are guaranteed non-None because stdout/stderr=subprocess.PIPE
+        # was passed above; bind them locally so this is explicit.
+        proc_stdout = process.stdout
+        proc_stderr = process.stderr
+        assert proc_stdout is not None and proc_stderr is not None
+
         # Use select for non-blocking I/O
-        stdout_fd = process.stdout.fileno()
-        stderr_fd = process.stderr.fileno()
+        stdout_fd = proc_stdout.fileno()
+        stderr_fd = proc_stderr.fileno()
 
         readable_fds = [stdout_fd, stderr_fd]
         stdout_data, stderr_data = "", ""
@@ -859,7 +867,7 @@ def execute_command(command: str) -> tuple[int, str]:
 
             for fd in ready_to_read:
                 if fd == stdout_fd:
-                    data = process.stdout.read(1024)
+                    data = proc_stdout.read(1024)
                     if not data:  # EOF
                         readable_fds.remove(stdout_fd)
                     else:
@@ -868,7 +876,7 @@ def execute_command(command: str) -> tuple[int, str]:
                         output += data
 
                 elif fd == stderr_fd:
-                    data = process.stderr.read(1024)
+                    data = proc_stderr.read(1024)
                     if not data:  # EOF
                         readable_fds.remove(stderr_fd)
                     else:
@@ -896,13 +904,13 @@ def execute_command(command: str) -> tuple[int, str]:
 
 
 def log(
-    log_file: str,
+    log_file: Optional[str],
     backend: LLMBackend,
     system_prompt: str,
     prompt: str,
     response: str,
     tool_calls: Optional[list] = None,
-):
+) -> None:
     """Append a request/response entry to the log file, if configured.
 
     Args:
@@ -1230,12 +1238,19 @@ def main() -> int:
 
         # Command generation and execution loop
         fix_info = FixInfo()
-        declined_commands = []
+        # Entries are {"command": str, "note": Optional[str]} (see
+        # _process_command_confirmation), not bare command strings.
+        declined_commands: list[dict] = []
 
         while True:
             try:
                 # Generate, fix, or regenerate command
                 if fix_info.fix_command:
+                    # When fix_command is set, the failed-command details were
+                    # populated together with it (see _handle_command_failure).
+                    assert fix_info.failed_command is not None
+                    assert fix_info.failed_command_exit_code is not None
+                    assert fix_info.failed_command_output is not None
                     command_result = asyncio.run(
                         generate_command_fix(
                             config,

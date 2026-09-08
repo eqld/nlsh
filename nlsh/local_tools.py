@@ -17,7 +17,7 @@ import os
 import re
 import shutil
 import subprocess
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable
 
 from nlsh.tools.common import format_path_entries, format_size, scan_visible_entries
 from nlsh.tools.environment import EnvInspector
@@ -71,18 +71,18 @@ def _tool_list_directory(path: str = ".", max_entries: int = 50) -> str:
     shown = entries[:max_entries]
 
     lines = [f"Directory listing for {resolved} ({total} entries, showing {len(shown)}):"]
-    for e in shown:
+    for entry in shown:
         try:
-            if e.is_dir(follow_symlinks=False):
-                lines.append(f"{e.name}/")
+            if entry.is_dir(follow_symlinks=False):
+                lines.append(f"{entry.name}/")
             else:
                 try:
-                    size = format_size(e.stat(follow_symlinks=False).st_size)
+                    size = format_size(entry.stat(follow_symlinks=False).st_size)
                 except OSError:
                     size = "?"
-                lines.append(f"{e.name}\t{size}")
+                lines.append(f"{entry.name}\t{size}")
         except OSError:
-            lines.append(f"{e.name}\t?")
+            lines.append(f"{entry.name}\t?")
 
     if total > len(shown):
         lines.append(f"... ({total - len(shown)} more entries not shown)")
@@ -193,7 +193,7 @@ class LocalToolRegistry:
     """
 
     def __init__(self) -> None:
-        self._tools: Dict[str, Dict[str, Any]] = {}
+        self._tools: dict[str, dict[str, Any]] = {}
         self._register_all()
 
     def _register(self, definition: dict, handler: Callable[..., str]) -> None:
@@ -322,7 +322,7 @@ class LocalToolRegistry:
             _tool_man_summary,
         )
 
-    def definitions(self) -> List[dict]:
+    def definitions(self) -> list[dict]:
         """Return the OpenAI ``tools`` parameter value for all registered tools."""
         return [t["definition"] for t in self._tools.values()]
 
@@ -338,7 +338,7 @@ class LocalToolRegistry:
 
         try:
             if arguments_json is None or arguments_json == "":
-                arguments: Dict[str, Any] = {}
+                arguments: dict[str, Any] = {}
             else:
                 arguments = json.loads(arguments_json)
                 if not isinstance(arguments, dict):
@@ -354,6 +354,8 @@ class LocalToolRegistry:
         except Exception as e:  # noqa: BLE001 - must never raise out of execute()
             return f"Tool error: {e}"
 
+        # Handlers are typed to return str, but coerce defensively: `execute()`
+        # must always hand a string back to the tool-call loop.
         if not isinstance(result, str):
-            result = str(result)
+            return str(result)
         return result

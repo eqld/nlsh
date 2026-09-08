@@ -7,7 +7,7 @@ This module provides functionality for loading and managing configuration.
 import copy
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional, Union, cast
 
 import yaml
 
@@ -21,8 +21,11 @@ class ConfigValidationError(Exception):
 class Config:
     """Configuration manager for nlsh."""
 
-    # Default configuration
-    DEFAULT_CONFIG = {
+    # Default configuration.
+    # Annotated explicitly: without it, mypy infers the value type as `object`
+    # (the join of str/list/int/dict), which makes every read and indexed
+    # assignment on `self.config` an error.
+    DEFAULT_CONFIG: ClassVar[dict[str, Any]] = {
         "shell": "bash",  # Default shell
         "backends": [
             {
@@ -58,9 +61,10 @@ class Config:
             config_path: Optional path to configuration file.
                 If not provided, will look in default locations.
         """
-        self.config = copy.deepcopy(self.DEFAULT_CONFIG)
+        self.config: dict[str, Any] = copy.deepcopy(self.DEFAULT_CONFIG)
         self.config_file_found = False  # Track if config file was found
-        self.config_file_path = None  # Store the path that was found or would be used
+        # Path that was found, or the default path that would be used
+        self.config_file_path: Optional[Path] = None
 
         # Load configuration from file
         config_file = self._find_config_file(config_path)
@@ -186,17 +190,25 @@ class Config:
 
             # Validate structured_output
             if "structured_output" in backend:  # noqa: SIM102
-                if backend["structured_output"] not in ("auto", "json_schema", "json_object", "off"):
+                if backend["structured_output"] not in (
+                    "auto",
+                    "json_schema",
+                    "json_object",
+                    "off",
+                ):
                     raise ConfigValidationError(
                         f"Backend {i} structured_output must be one of: auto, json_schema, json_object, off"
                     )
 
             # Validate tool_calling
-            if "tool_calling" in backend:
-                if backend["tool_calling"] not in ("auto", "on", "off"):
-                    raise ConfigValidationError(
-                        f"Backend {i} tool_calling must be one of: auto, on, off"
-                    )
+            if "tool_calling" in backend and backend["tool_calling"] not in (
+                "auto",
+                "on",
+                "off",
+            ):
+                raise ConfigValidationError(
+                    f"Backend {i} tool_calling must be one of: auto, on, off"
+                )
 
         # Validate stdin section (optional)
         if "stdin" in config:
@@ -233,7 +245,7 @@ class Config:
                             "nlgc.default_backend must be an integer or null"
                         )
 
-    def _load_config_file(self, config_file: str) -> None:
+    def _load_config_file(self, config_file: Union[str, Path]) -> None:
         """Load and validate configuration from file."""
         try:
             with open(config_file) as f:
@@ -357,7 +369,7 @@ class Config:
         Returns:
             str: Shell name.
         """
-        return self.config["shell"]
+        return cast(str, self.config["shell"])
 
     def get_backend(self, index: Optional[int] = None) -> Optional[dict[str, Any]]:
         """Get backend configuration.
@@ -371,11 +383,12 @@ class Config:
         if index is None:
             index = self.config["default_backend"]
 
+        backends: list[dict[str, Any]] = self.config["backends"]
         try:
-            return self.config["backends"][index]
+            return backends[index]
         except IndexError:
             # Fall back to first backend if index is invalid
-            return self.config["backends"][0] if self.config["backends"] else None
+            return backends[0] if backends else None
 
     def get_nlgc_config(self) -> dict[str, Any]:
         """Get nlgc specific configuration.
@@ -384,7 +397,7 @@ class Config:
             dict: nlgc configuration dictionary.
         """
         # Return the nlgc section, falling back to default if not present
-        return self.config.get("nlgc", self.DEFAULT_CONFIG["nlgc"])
+        return cast(dict[str, Any], self.config.get("nlgc", self.DEFAULT_CONFIG["nlgc"]))
 
     def get_stdin_config(self) -> dict[str, Any]:
         """Get stdin specific configuration.
@@ -393,7 +406,7 @@ class Config:
             dict: stdin configuration dictionary.
         """
         # Return the stdin section, falling back to default if not present
-        return self.config.get("stdin", self.DEFAULT_CONFIG["stdin"])
+        return cast(dict[str, Any], self.config.get("stdin", self.DEFAULT_CONFIG["stdin"]))
 
     def get_stdin_backend(self, is_vision: bool = False) -> Optional[int]:
         """Get appropriate backend index for STDIN processing.
@@ -409,14 +422,14 @@ class Config:
         if is_vision:  # noqa: SIM102
             # Try vision-specific backend first
             if stdin_config.get("default_backend_vision") is not None:
-                return stdin_config["default_backend_vision"]
+                return cast(int, stdin_config["default_backend_vision"])
 
         # Fall back to stdin default backend
         if stdin_config.get("default_backend") is not None:
-            return stdin_config["default_backend"]
+            return cast(int, stdin_config["default_backend"])
 
         # Fall back to global default
-        return self.config["default_backend"]
+        return cast(Optional[int], self.config["default_backend"])
 
     def get_nlgc_backend(self) -> Optional[int]:
         """Get appropriate backend index for nlgc processing.
@@ -428,10 +441,10 @@ class Config:
 
         # Try nlgc-specific backend first
         if nlgc_config.get("default_backend") is not None:
-            return nlgc_config["default_backend"]
+            return cast(int, nlgc_config["default_backend"])
 
         # Fall back to global default
-        return self.config["default_backend"]
+        return cast(Optional[int], self.config["default_backend"])
 
     @staticmethod
     def create_default_config(config_path: Optional[Path] = None) -> Path:

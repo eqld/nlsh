@@ -5,6 +5,11 @@ This module provides functionality for detecting and processing image input.
 """
 
 import base64
+from typing import Optional
+
+# Default per-backend image size cap (MB), used when a backend does not set
+# `max_image_size_mb` or when no backend config could be resolved.
+DEFAULT_MAX_IMAGE_SIZE_MB = 20.0
 
 
 def detect_input_type(data: bytes) -> str:
@@ -127,7 +132,7 @@ def prepare_image_for_api(data: bytes, mime_type: str) -> tuple[str, str]:
     return base64_data, mime_type
 
 
-def validate_image_size(data: bytes, max_size_mb: float = 20.0) -> None:
+def validate_image_size(data: bytes, max_size_mb: float = DEFAULT_MAX_IMAGE_SIZE_MB) -> None:
     """Validate image size.
 
     Args:
@@ -142,16 +147,19 @@ def validate_image_size(data: bytes, max_size_mb: float = 20.0) -> None:
         raise ValueError(f"Image too large: {size_mb:.1f}MB (max: {max_size_mb}MB)")
 
 
-def get_backend_image_size_limit(backend_config: dict) -> float:
+def get_backend_image_size_limit(backend_config: Optional[dict]) -> float:
     """Get the image size limit for a backend.
 
     Args:
-        backend_config: Backend configuration dictionary.
+        backend_config: Backend configuration dictionary, or None when no
+            backend could be resolved (the default limit is then used).
 
     Returns:
         float: Maximum image size in MB.
     """
-    return backend_config.get("max_image_size_mb", 20.0)
+    if not backend_config:
+        return DEFAULT_MAX_IMAGE_SIZE_MB
+    return float(backend_config.get("max_image_size_mb", DEFAULT_MAX_IMAGE_SIZE_MB))
 
 
 def is_image_type(mime_type: str) -> bool:

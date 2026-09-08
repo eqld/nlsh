@@ -26,9 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Directory listing.** Entries are now sorted (directories first, then files, alphabetically) and capped at 50 entries with an explicit truncation note.
 - **Packaging consolidated into `pyproject.toml`.** `setup.py` was removed, dependencies are split into `requirements.txt` and `requirements-dev.txt` (with a `dev` extra), `openai>=1.40.0` is required, the minimum supported Python is 3.9, and ruff, black, mypy and pytest are configured centrally.
 - **Internal refactoring.** Shared LLM generation logic, prompt rule blocks and tool helpers were extracted into common helpers; confirmation and fix state now use an enum and a dataclass instead of magic strings and dicts.
+- **Clearer `nlgc -a/--all` help text.** The flag widens which changes are *analyzed*; the commit itself is always `git commit -m <message>` and therefore only ever includes staged changes. The help text now says so explicitly.
+- **CI installs pinned lint tools** from `requirements-dev.txt` instead of an unpinned `pip install ruff black`, so an unrelated upstream release can no longer break the build, and now runs `mypy nlsh/` as well. `types-PyYAML` was added to the development dependencies.
+- **Type annotations** were added or corrected across the codebase (`Config.DEFAULT_CONFIG`, `Config.config_file_path`, `BackendManager.backends`, `log()`'s optional `log_file`, the `Optional` prompt-builder defaults, `DirLister._format_file_info`, `format_size`, `get_backend_image_size_limit`, and the `tools` helpers). `mypy nlsh/` is now clean.
 
 ### Fixed
 
+- **`nlgc` exit codes.** `main()` ended in `finally: sys.exit(exit_code)` with `exit_code` defaulting to `1`, which discarded any in-flight `SystemExit`. As a result `nlgc --help` and a *successful* `nlgc --init` both reported failure (1), and an invalid flag returned 1 instead of argparse's 2. Explicit exits are now propagated unchanged, matching `nlsh` and `nlt`.
+- **`format_size` could return `None`.** Its unit loop had no fallback `return`, so an input that fell through (e.g. a negative size) yielded `None`, which callers interpolated into directory listings as the literal `"None"`.
+- **Crash on a null model response.** `generate_response` called `.strip()` directly on `choices[0].message.content`, which is optional in the API schema; a tool-call-only or content-filtered response raised `AttributeError` instead of returning the "no response generated" error.
+- **`get_backend_image_size_limit(None)` raised `AttributeError`.** `Config.get_backend()` may legitimately return `None`; the default limit is now used instead.
+- `DirLister._format_file_info` was annotated as returning `dict[str, str]` while it actually returns `None` for unreadable entries and stores a `bool` under `is_dir`.
+- Renamed loop variables that shadowed an enclosing `except ... as e` binding (in `local_tools._tool_list_directory`) and an `Optional` config variable (in `BackendManager.get_vision_capable_backend`).
 - `execute_command` now always returns the `(exit code, output)` tuple, including on its error paths.
 - Pressing `Ctrl+C` while a generated command runs interrupts only that command instead of terminating `nlsh` itself.
 - `nlgc` captures and reports `git commit` output, falling back to the exit code when stderr is empty.

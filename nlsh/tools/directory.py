@@ -7,6 +7,7 @@ This module provides a tool for listing files in the current directory.
 import os
 import shlex
 import stat
+from typing import Any, Optional
 
 from nlsh.tools.base import BaseTool
 from nlsh.tools.common import format_size, scan_visible_entries
@@ -29,14 +30,16 @@ class DirLister(BaseTool):
         # Use shlex.quote to escape special characters
         return shlex.quote(path)
 
-    def _format_file_info(self, entry: os.DirEntry) -> dict[str, str]:
+    def _format_file_info(self, entry: os.DirEntry) -> Optional[dict[str, Any]]:
         """Format file information safely.
 
         Args:
             entry: Directory entry.
 
         Returns:
-            Dict[str, str]: Formatted file information.
+            Optional[dict[str, Any]]: Formatted file information (``is_dir`` is
+                a bool, the other values are strings), or None if the entry
+                cannot be stat'ed.
         """
         try:
             stats = entry.stat()

@@ -13,9 +13,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff black
+      # Install from requirements-dev.txt so the linter versions used here match
+      # the ones pinned for local development (an unpinned `pip install ruff
+      # black` can break CI on an unrelated upstream release).
+      - run: pip install -r requirements-dev.txt
       - run: ruff check nlsh/
       - run: black --check nlsh/
+      - run: mypy nlsh/
 
   test:
     runs-on: ${{ matrix.os }}
@@ -30,7 +34,4 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements-dev.txt
-      - name: Run tests (skip if no tests yet)
-        run: |
-          if [ -d tests ]; then pytest -q; else echo "No tests directory yet"; fi
-        shell: bash
+      - run: pytest -q

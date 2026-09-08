@@ -14,11 +14,47 @@
       }
     },
     {
-      "name": "Debug nlsh (interactive)",
+      "name": "Debug nlsh (verbose)",
       "type": "debugpy",
       "request": "launch",
       "module": "nlsh.main",
-      "args": ["-i", "List running processes"],
+      "args": ["-v", "List running processes"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Debug nlsh (print only)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "nlsh.main",
+      "args": ["-p", "List running processes"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Debug nlgc",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "nlsh.git_commit",
+      "args": [],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Debug nlt",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "nlsh.token_count",
+      "args": ["-f", "README.md"],
       "console": "integratedTerminal",
       "justMyCode": false,
       "env": {
@@ -27,3 +63,4 @@
     }
   ]
 }
+

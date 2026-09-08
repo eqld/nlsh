@@ -121,6 +121,18 @@ class TestGenerateResponse:
         assert result == "```bash\nls -la\n```"
 
     @pytest.mark.asyncio
+    async def test_none_content_returns_error_not_attribute_error(self, backend):
+        """`message.content` is Optional in the API schema.
+
+        Regression test: the code called .strip() on it unconditionally, which
+        raised AttributeError when a backend returned a null content (e.g. a
+        tool-call-only or filtered response).
+        """
+        backend.client.chat.completions.create = AsyncMock(return_value=make_chat_response(None))
+        result = await backend.generate_response("list files", "system context")
+        assert result == "Error: No response generated"
+
+    @pytest.mark.asyncio
     async def test_create_called_with_expected_kwargs(self, backend):
         await backend.generate_response(
             "list files", "system context", max_tokens=123, regeneration_count=2
