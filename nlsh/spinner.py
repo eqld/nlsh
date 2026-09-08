@@ -5,16 +5,16 @@ This module provides a simple spinner for showing progress in the terminal.
 """
 
 import sys
-import time
 import threading
+import time
 
 
 class Spinner:
     """Simple spinner to show progress."""
-    
+
     def __init__(self, message="Thinking", stream=sys.stderr):
         """Initialize the spinner.
-        
+
         Args:
             message: Message to display before the spinner.
             stream: Stream to write to (default: stderr).
@@ -25,7 +25,7 @@ class Spinner:
         self.spinner_thread = None
         self.spinner_chars = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
         self.current = 0
-    
+
     def spin(self):
         """Spin the spinner."""
         while self.running:
@@ -36,7 +36,7 @@ class Spinner:
         # Clear the spinner line
         self.stream.write("\r" + " " * (len(self.message) + 15) + "\r")
         self.stream.flush()
-    
+
     def start(self):
         """Start the spinner."""
         if not self.running:
@@ -44,7 +44,7 @@ class Spinner:
             self.spinner_thread = threading.Thread(target=self.spin)
             self.spinner_thread.daemon = True
             self.spinner_thread.start()
-    
+
     def stop(self):
         """Stop the spinner."""
         self.running = False

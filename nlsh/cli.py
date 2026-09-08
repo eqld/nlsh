@@ -7,6 +7,7 @@ This module provides the command-line interface for the nlsh utility.
 import argparse
 import asyncio
 import datetime
+import enum
 import json
 import locale
 import os
@@ -15,21 +16,88 @@ import signal
 import subprocess
 import sys
 import traceback
-from typing import Any, List, Optional, Union, TextIO
+from dataclasses import dataclass
+from typing import Any, Optional, TextIO
 
+from nlsh.backends import BackendManager, CommandResult, LLMBackend
 from nlsh.config import Config
-from nlsh.backends import BackendManager, LLMBackend
-from nlsh.config import Config
-from nlsh.backends import BackendManager, LLMBackend
-from nlsh.tools import get_tools
+from nlsh.editor import edit_text_in_editor
+from nlsh.local_tools import LocalToolRegistry
 from nlsh.prompt import PromptBuilder
 from nlsh.spinner import Spinner
-from nlsh.editor import edit_text_in_editor
+from nlsh.tools import get_minimal_tools, get_tools
+
+
+class ConfirmationResult(enum.Enum):
+    """Possible outcomes of asking the user to confirm command execution."""
+
+    EXECUTE = "execute"
+    DECLINE = "decline"
+    REGENERATE = "regenerate"
+    EDIT = "edit"
+    EXPLAIN = "explain"
+
+
+@dataclass
+class FixInfo:
+    """State carried between iterations of the command generation loop."""
+
+    fix_command: bool = False
+    failed_command: Optional[str] = None
+    failed_command_exit_code: Optional[int] = None
+    failed_command_output: Optional[str] = None
+    regenerate: bool = False
+
+
+# Shared backend managers keyed by config object identity. Reusing the same
+# BackendManager (and thus the same cached LLMBackend instances) across
+# generation/regeneration/fix calls within one nlsh run lets the backend's
+# resolved structured-output mode cache (`_resolved_structured_mode`) persist
+# between attempts, avoiding retries of known-unsupported response_format
+# modes on every call.
+_backend_managers: dict[int, BackendManager] = {}
+
+
+def _get_backend_manager(config: Config) -> BackendManager:
+    """Get (or create) the shared BackendManager for a config object."""
+    key = id(config)
+    manager = _backend_managers.get(key)
+    if manager is None:
+        manager = BackendManager(config)
+        _backend_managers[key] = manager
+    return manager
+
+
+def _should_attempt_tools(backend: LLMBackend, verbose: bool) -> bool:
+    """Decide whether native model tool calling should be attempted for this
+    command generation/regeneration/fix request.
+
+    Tool calling is attempted only for non-verbose requests (verbose keeps
+    the legacy streaming path with the full up-front context),
+    when the backend's `tool_calling` config is not "off", and when
+    the backend hasn't already been determined (in "auto" mode) to reject the
+    `tools` parameter.
+
+    Args:
+        backend: The resolved backend instance for this request.
+        verbose: Whether this is a verbose (-v/-vv) request.
+
+    Returns:
+        bool: True if a reduced-context, tool-calling-enabled prompt should
+            be built for this request.
+    """
+    if verbose:
+        return False
+    if backend.tool_calling == "off":
+        return False
+    # `tools_supported` is tri-state: None (not probed yet) and True both mean
+    # "worth offering tools"; only an explicit False disables them.
+    return backend.tools_supported is not False
 
 
 def _check_stdin_input() -> Optional[tuple[bytes, str]]:
     """Check if there's input from STDIN and read it.
-    
+
     Returns:
         tuple: (content, mime_type) if available, None otherwise.
     """
@@ -39,13 +107,13 @@ def _check_stdin_input() -> Optional[tuple[bytes, str]]:
             stdin_data = sys.stdin.buffer.read()
             if not stdin_data:
                 return None
-            
+
             # Import here to avoid circular imports
             from nlsh.image_utils import detect_input_type
-            
+
             # Detect input type
             mime_type = detect_input_type(stdin_data)
-            
+
             return stdin_data, mime_type
         except Exception as e:
             print(f"Error reading from STDIN: {e}", file=sys.stderr)
@@ -53,160 +121,322 @@ def _check_stdin_input() -> Optional[tuple[bytes, str]]:
     return None
 
 
-def parse_args(args: List[str]) -> argparse.Namespace:
+def parse_args(args: list[str]) -> argparse.Namespace:
     """Parse command-line arguments.
-    
+
     Args:
         args: Command-line arguments.
-        
+
     Returns:
         argparse.Namespace: Parsed arguments.
     """
     parser = argparse.ArgumentParser(
         description="Neural Shell (nlsh) - AI-driven command-line assistant"
     )
-    
+
     # Backend selection arguments
     for i in range(10):  # Support up to 10 backends
         parser.add_argument(
-            f"-{i}",
-            dest="backend",
-            action="store_const",
-            const=i,
-            help=f"Use backend {i}"
+            f"-{i}", dest="backend", action="store_const", const=i, help=f"Use backend {i}"
         )
 
     # Verbose mode
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="count",
         default=0,
-        help="Verbose mode (-v for reasoning tokens, -vv for debug info)"
+        help="Verbose mode (-v for reasoning tokens, -vv for debug info)",
     )
-    
+
     # Configuration file
-    parser.add_argument(
-        "--config",
-        help="Path to configuration file"
-    )
-    
+    parser.add_argument("--config", help="Path to configuration file")
+
     # Initialize configuration
-    parser.add_argument(
-        "--init",
-        action="store_true",
-        help="Initialize a new configuration file"
-    )
-    
+    parser.add_argument("--init", action="store_true", help="Initialize a new configuration file")
+
     # Prompt file
-    parser.add_argument(
-        "--prompt-file",
-        help="Path to prompt file"
-    )
-    
+    parser.add_argument("--prompt-file", help="Path to prompt file")
+
     # Version
-    parser.add_argument(
-        "--version",
-        action="store_true",
-        help="Show version information"
-    )
-    
+    parser.add_argument("--version", action="store_true", help="Show version information")
+
     # Log file
-    parser.add_argument(
-        "--log-file",
-        help="Path to file for logging LLM requests and responses"
-    )
-    
+    parser.add_argument("--log-file", help="Path to file for logging LLM requests and responses")
+
     # Max tokens for STDIN processing
     parser.add_argument(
         "--max-tokens",
         type=int,
-        help="Maximum output tokens for STDIN processing (overrides config)"
+        help="Maximum output tokens for STDIN processing (overrides config)",
     )
-    
+
     # Print flag - generate command without executing
     parser.add_argument(
-        "-p", "--print",
-        action="store_true",
-        help="Print inferred command without running it"
+        "-p", "--print", action="store_true", help="Print inferred command without running it"
     )
-    
+
     # Explain flag - explain already crafted command
     parser.add_argument(
-        "-e", "--explain",
-        action="store_true",
-        help="Explain already crafted command"
+        "-e", "--explain", action="store_true", help="Explain already crafted command"
     )
 
     # Prompt (positional argument)
-    parser.add_argument(
-        "prompt",
-        nargs="*",
-        help="Prompt for command generation"
-    )
-    
+    parser.add_argument("prompt", nargs="*", help="Prompt for command generation")
+
     return parser.parse_args(args)
 
 
-async def generate_command(
-    config: Config, 
-    backend_index: Optional[int], 
-    prompt: str,
-    verbose: bool = False, 
-    log_file: Optional[str] = None,
+async def _run_generation(
+    config: Config,
+    backend_index: Optional[int],
+    system_prompt: str,
+    user_prompt: str,
+    spinner_message: str,
+    verbose: bool,
+    log_file: Optional[str],
+    *,
+    strip_markdown: bool = True,
+    max_tokens: int = 500,
+    regeneration_count: int = 0,
 ) -> str:
+    """Run LLM generation with shared spinner/logging boilerplate.
+
+    Args:
+        config: Configuration object.
+        backend_index: Backend index to use.
+        system_prompt: System prompt to send to the backend.
+        user_prompt: User prompt to send to the backend.
+        spinner_message: Message to show on the spinner while waiting.
+        verbose: Whether to print reasoning tokens to stderr.
+        log_file: Optional path to log file.
+        strip_markdown: Whether to strip markdown code blocks from the response.
+        max_tokens: Maximum tokens to generate.
+        regeneration_count: Number of times the response has been regenerated.
+
+    Returns:
+        str: Generated response.
+
+    Raises:
+        Exception: If generation fails.
+    """
+    # Get backend manager
+    backend_manager = BackendManager(config)
+
+    # Get backend
+    backend = backend_manager.get_backend(backend_index)
+
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner(spinner_message)
+        spinner.start()
+
+    try:
+        # Generate response
+        response = await backend.generate_response(
+            user_prompt,
+            system_prompt,
+            verbose=verbose,
+            strip_markdown=strip_markdown,
+            max_tokens=max_tokens,
+            regeneration_count=regeneration_count,
+        )
+        log(log_file, backend, system_prompt, user_prompt, response)
+        return response
+    finally:
+        if spinner:
+            spinner.stop()
+
+
+async def _run_command_generation(
+    config: Config,
+    backend_index: Optional[int],
+    system_prompt: str,
+    structured_system_prompt: Optional[str],
+    user_prompt: str,
+    spinner_message: str,
+    verbose: bool,
+    log_file: Optional[str],
+    *,
+    max_tokens: int = 500,
+    regeneration_count: int = 0,
+    use_tools: bool = False,
+) -> CommandResult:
+    """Run command generation with structured output (and optional tool
+    calling) support.
+
+    When not verbose:
+    - If `use_tools` is True, this uses the backend's native tool-calling
+      path (`generate_command_with_tools`), letting the model call local
+      read-only tools (see `nlsh.local_tools.LocalToolRegistry`) to fetch
+      additional context on demand. That path transparently falls back to
+      the structured-output path (and further to legacy plain text) if the
+      backend rejects the `tools` parameter in "auto" mode.
+    - Otherwise, this uses the backend's structured JSON output path
+      (`generate_structured_command`), which transparently falls back to the
+      legacy plain-text path when the backend doesn't support
+      response_format.
+    Verbose (-v/-vv) requests always use the legacy plain-text path so the
+    reasoning-token streaming UX is preserved (tool calling never applies to
+    verbose requests; see `_should_attempt_tools`).
+
+    Args:
+        config: Configuration object.
+        backend_index: Backend index to use.
+        system_prompt: Plain-text system prompt (legacy path and fallbacks).
+            When `use_tools` is True, callers should pass the reduced-context
+            prompt (see `PromptBuilder.build_minimal_*_system_prompt`).
+        structured_system_prompt: JSON-variant system prompt for structured
+            attempts, or None (verbose requests don't need it).
+        user_prompt: User prompt to send to the backend.
+        spinner_message: Message to show on the spinner while waiting.
+        verbose: Whether to print reasoning tokens to stderr.
+        log_file: Optional path to log file.
+        max_tokens: Maximum tokens to generate.
+        regeneration_count: Number of times the response has been regenerated.
+        use_tools: Whether to attempt native model tool calling for this
+            request (ignored when `verbose` is True).
+
+    Returns:
+        CommandResult: Generated command with optional danger level.
+
+    Raises:
+        Exception: If generation fails.
+    """
+    # Get backend from the shared manager so the backend instance (and its
+    # resolved structured-output mode cache) persists across regeneration
+    # and fix attempts within one nlsh run.
+    backend_manager = _get_backend_manager(config)
+    backend = backend_manager.get_backend(backend_index)
+
+    # Start spinner if not in verbose mode
+    spinner = None
+    if not verbose:
+        spinner = Spinner(spinner_message)
+        spinner.start()
+
+    try:
+        if verbose:
+            # Legacy plain-text path (keeps -v reasoning streaming UX).
+            response = await backend.generate_response(
+                user_prompt,
+                system_prompt,
+                verbose=True,
+                strip_markdown=True,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+            )
+            result = CommandResult(command=response, danger_level=None, raw_response=response)
+        elif use_tools:
+            registry = LocalToolRegistry()
+            result = await backend.generate_command_with_tools(
+                user_prompt,
+                system_prompt,
+                registry,
+                verbose=False,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+                structured_system_context=structured_system_prompt,
+            )
+        else:
+            result = await backend.generate_structured_command(
+                user_prompt,
+                system_prompt,
+                verbose=False,
+                max_tokens=max_tokens,
+                regeneration_count=regeneration_count,
+                structured_system_context=structured_system_prompt,
+            )
+
+        # Log the raw model response (JSON or plain text) as it came from
+        # the model, plus a summary of any tool calls made while generating
+        # it (None when tool calling wasn't used for this request).
+        log(
+            log_file,
+            backend,
+            system_prompt,
+            user_prompt,
+            result.raw_response or result.command,
+            tool_calls=result.tool_calls,
+        )
+        return result
+    finally:
+        if spinner:
+            spinner.stop()
+
+
+async def generate_command(
+    config: Config,
+    backend_index: Optional[int],
+    prompt: str,
+    verbose: bool = False,
+    log_file: Optional[str] = None,
+) -> CommandResult:
     """Generate a command using the specified backend.
-    
+
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
         prompt: User prompt.
         verbose: Whether to print reasoning tokens to stderr.
         log_file: Optional path to log file.
-        
+
     Returns:
-        str: Generated shell command.
-        
+        CommandResult: Generated shell command with optional danger level.
+
     Raises:
         Exception: If command generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
-    # Get tools
-    tools = get_tools(config=config)
-    
-    # Build prompt
+    # Fetch the backend first (from the shared, cached manager) so we can
+    # decide whether to attempt native model tool calling for this request
+    # -- which determines whether to build the full or reduced-context
+    # up-front prompt below.
+    backend = _get_backend_manager(config).get_backend(backend_index)
+    use_tools = _should_attempt_tools(backend, verbose)
+
+    # Get tools: only the cheap ones when tool calling is active, since the
+    # model can fetch the rest (directory listings, env vars, command
+    # availability, help pages) on demand via the provided local tools.
+    tools = get_minimal_tools(config=config) if use_tools else get_tools(config=config)
+
+    # Build prompts (the JSON structured-output variant is only needed for
+    # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_system_prompt(tools)
-    
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if not verbose:
-        spinner = Spinner("Thinking")
-        spinner.start()
-    
-    try:
-        # Generate command
-        response = await backend.generate_response(prompt, system_prompt, verbose=verbose, regeneration_count=0)
-        log(log_file, backend, system_prompt, prompt, response)
-        return response
-    finally:
-        if spinner: spinner.stop()
+    if use_tools:
+        system_prompt = prompt_builder.build_minimal_system_prompt(tools)
+        structured_system_prompt = (
+            None if verbose else prompt_builder.build_minimal_system_prompt(tools, structured=True)
+        )
+    else:
+        system_prompt = prompt_builder.build_system_prompt(tools)
+        structured_system_prompt = (
+            None if verbose else prompt_builder.build_system_prompt(tools, structured=True)
+        )
+
+    return await _run_command_generation(
+        config,
+        backend_index,
+        system_prompt,
+        structured_system_prompt,
+        prompt,
+        "Thinking",
+        verbose,
+        log_file,
+        use_tools=use_tools,
+    )
 
 
 async def generate_command_regeneration(
     config: Config,
     backend_index: Optional[int],
     original_request: str,
-    declined_commands: List[dict],
+    declined_commands: list[dict],
     verbose: bool = False,
     log_file: Optional[str] = None,
-) -> str:
+) -> CommandResult:
     """Generate a regenerated command using the specified backend.
-    
+
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
@@ -214,55 +444,67 @@ async def generate_command_regeneration(
         declined_commands: List of declined commands with optional notes.
         verbose: Whether to print reasoning tokens to stderr.
         log_file: Optional path to log file.
-        
+
     Returns:
-        str: Generated shell command.
-        
+        CommandResult: Generated shell command with optional danger level.
+
     Raises:
         Exception: If command generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
+    # Fetch the backend first so we can decide whether to attempt native
+    # model tool calling for this request (see generate_command).
+    backend = _get_backend_manager(config).get_backend(backend_index)
+    use_tools = _should_attempt_tools(backend, verbose)
+
     # Get tools
-    tools = get_tools(config=config)
-    
-    # Build prompt
+    tools = get_minimal_tools(config=config) if use_tools else get_tools(config=config)
+
+    # Build prompts (the JSON structured-output variant is only needed for
+    # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_regeneration_system_prompt(tools)
+    if use_tools:
+        system_prompt = prompt_builder.build_minimal_regeneration_system_prompt(tools)
+        structured_system_prompt = (
+            None
+            if verbose
+            else prompt_builder.build_minimal_regeneration_system_prompt(tools, structured=True)
+        )
+    else:
+        system_prompt = prompt_builder.build_regeneration_system_prompt(tools)
+        structured_system_prompt = (
+            None
+            if verbose
+            else prompt_builder.build_regeneration_system_prompt(tools, structured=True)
+        )
     user_prompt = prompt_builder.build_regeneration_user_prompt(original_request, declined_commands)
     regeneration_count = len(declined_commands)
-    
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if not verbose:
-        spinner = Spinner("Regenerating")
-        spinner.start()
-    
-    try:
-        # Generate command
-        response = await backend.generate_response(user_prompt, system_prompt, verbose=verbose, regeneration_count=regeneration_count)
-        log(log_file, backend, system_prompt, user_prompt, response)
-        return response
-    finally:
-        if spinner: spinner.stop()
+
+    return await _run_command_generation(
+        config,
+        backend_index,
+        system_prompt,
+        structured_system_prompt,
+        user_prompt,
+        "Regenerating",
+        verbose,
+        log_file,
+        regeneration_count=regeneration_count,
+        use_tools=use_tools,
+    )
 
 
 async def generate_command_fix(
-    config: Config, 
-    backend_index: Optional[int], 
+    config: Config,
+    backend_index: Optional[int],
     prompt: str,
     failed_command: str,
     failed_command_exit_code: int,
     failed_command_output: str,
-    verbose: bool = False, 
+    verbose: bool = False,
     log_file: Optional[str] = None,
-) -> str:
+) -> CommandResult:
     """Generate a fix for failed command using the specified backend.
-    
+
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
@@ -272,45 +514,54 @@ async def generate_command_fix(
         failed_command_output: Output of the failed command.
         verbose: Whether to print reasoning tokens to stderr.
         log_file: Optional path to log file.
-        
+
     Returns:
-        str: Fixed shell command.
-        
+        CommandResult: Fixed shell command with optional danger level.
+
     Raises:
         Exception: If command generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
+    # Fetch the backend first so we can decide whether to attempt native
+    # model tool calling for this request (see generate_command).
+    backend = _get_backend_manager(config).get_backend(backend_index)
+    use_tools = _should_attempt_tools(backend, verbose)
+
     # Get tools
-    tools = get_tools(config=config)
-    
-    # Build prompt
+    tools = get_minimal_tools(config=config) if use_tools else get_tools(config=config)
+
+    # Build prompts (the JSON structured-output variant is only needed for
+    # non-verbose requests; verbose requests use the legacy plain-text path)
     prompt_builder = PromptBuilder(config)
-    system_prompt = prompt_builder.build_fixing_system_prompt(tools)
+    if use_tools:
+        system_prompt = prompt_builder.build_minimal_fixing_system_prompt(tools)
+        structured_system_prompt = (
+            None
+            if verbose
+            else prompt_builder.build_minimal_fixing_system_prompt(tools, structured=True)
+        )
+    else:
+        system_prompt = prompt_builder.build_fixing_system_prompt(tools)
+        structured_system_prompt = (
+            None if verbose else prompt_builder.build_fixing_system_prompt(tools, structured=True)
+        )
     user_prompt = prompt_builder.build_fixing_user_prompt(
         prompt,
-        failed_command, 
-        failed_command_exit_code, 
+        failed_command,
+        failed_command_exit_code,
         failed_command_output,
     )
 
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if not verbose:
-        spinner = Spinner("Fixing")
-        spinner.start()
-    
-    try:
-        # Generate command
-        response = await backend.generate_response(user_prompt, system_prompt, verbose=verbose)
-        log(log_file, backend, system_prompt, user_prompt, response)
-        return response
-    finally:
-        if spinner: spinner.stop()
+    return await _run_command_generation(
+        config,
+        backend_index,
+        system_prompt,
+        structured_system_prompt,
+        user_prompt,
+        "Fixing",
+        verbose,
+        log_file,
+        use_tools=use_tools,
+    )
 
 
 async def process_stdin_input(
@@ -324,7 +575,7 @@ async def process_stdin_input(
     max_tokens_override: Optional[int] = None,
 ) -> str:
     """Process STDIN input using the specified backend.
-    
+
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
@@ -333,58 +584,62 @@ async def process_stdin_input(
         user_prompt: User's instruction for processing the content.
         verbose: Whether to print reasoning tokens to stderr.
         log_file: Optional path to log file.
-        
+
     Returns:
         str: Processed result.
-        
+
     Raises:
         Exception: If processing fails.
     """
     # Import here to avoid circular imports
-    from nlsh.image_utils import is_image_type, validate_image_size, get_backend_image_size_limit
-    
+    from nlsh.image_utils import get_backend_image_size_limit, is_image_type, validate_image_size
+
     # Get backend manager
     backend_manager = BackendManager(config)
-    
+
     # Build prompt (no system tools needed for STDIN processing)
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_stdin_processing_system_prompt()
-    
+
     # Get max tokens from config or override
     stdin_config = config.get_stdin_config()
-    max_tokens = max_tokens_override if max_tokens_override is not None else stdin_config.get("max_tokens", 2000)
-    
+    max_tokens = (
+        max_tokens_override
+        if max_tokens_override is not None
+        else stdin_config.get("max_tokens", 2000)
+    )
+
     # Check if this is image input
     is_image = is_image_type(mime_type)
-    
+
     if is_image:
         # Handle image input
         try:
             if backend_index is None:
                 # Get appropriate backend for vision processing if backend number is not explicitly set as CLI argument
                 backend_index = config.get_stdin_backend(is_vision=True)
-            
+
                 # Get vision-capable backend
                 try:
                     backend = backend_manager.get_vision_capable_backend(backend_index)
                 except ValueError as e:
-                    raise ValueError(str(e))
+                    raise ValueError(str(e))  # noqa: B904
             else:
                 backend = backend_manager.get_backend(backend_index)
                 if not backend.supports_vision():
                     raise ValueError("Selected backend does not support image processing")
-            
+
             # Get backend configuration and validate image size with backend-specific limit
             backend_config = config.get_backend(backend_index)
             max_image_size = get_backend_image_size_limit(backend_config)
             validate_image_size(stdin_data, max_image_size)
-            
+
             # Start spinner if not in verbose mode
             spinner = None
             if not verbose:
                 spinner = Spinner("Processing image")
                 spinner.start()
-            
+
             try:
                 # Process image input
                 response = await backend.generate_response(
@@ -394,37 +649,40 @@ async def process_stdin_input(
                     strip_markdown=False,  # Don't strip markdown for image processing
                     max_tokens=max_tokens,
                     image_data=stdin_data,
-                    image_mime_type=mime_type
+                    image_mime_type=mime_type,
                 )
                 log(log_file, backend, system_prompt, user_prompt, response)
                 return response
             finally:
-                if spinner: spinner.stop()
-                
+                if spinner:
+                    spinner.stop()
+
         except Exception as e:
-            raise Exception(f"Error processing image: {str(e)}")
+            raise Exception(f"Error processing image: {str(e)}")  # noqa: B904
     else:
         # Handle text input
         try:
-            stdin_content = stdin_data.decode('utf-8', errors='replace').strip()
+            stdin_content = stdin_data.decode("utf-8", errors="replace").strip()
         except UnicodeDecodeError:
-            raise ValueError("Unable to decode STDIN input as text")
-        
-        user_prompt_formatted = prompt_builder.build_stdin_processing_user_prompt(stdin_content, user_prompt)
-        
+            raise ValueError("Unable to decode STDIN input as text")  # noqa: B904
+
+        user_prompt_formatted = prompt_builder.build_stdin_processing_user_prompt(
+            stdin_content, user_prompt
+        )
+
         if backend_index is None:
-                # Get appropriate backend if backend number is not explicitly set as CLI argument
-                backend_index = config.get_stdin_backend(is_vision=False)
+            # Get appropriate backend if backend number is not explicitly set as CLI argument
+            backend_index = config.get_stdin_backend(is_vision=False)
 
         # Get backend
         backend = backend_manager.get_backend(backend_index)
-        
+
         # Start spinner if not in verbose mode
         spinner = None
         if not verbose:
             spinner = Spinner("Processing text")
             spinner.start()
-        
+
         try:
             # Process text input
             response = await backend.generate_response(
@@ -432,12 +690,13 @@ async def process_stdin_input(
                 system_prompt,
                 verbose=verbose,
                 strip_markdown=False,  # Don't strip markdown for text processing
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
             )
             log(log_file, backend, system_prompt, user_prompt_formatted, response)
             return response
         finally:
-            if spinner: spinner.stop()
+            if spinner:
+                spinner.stop()
 
 
 async def explain_command(
@@ -445,82 +704,83 @@ async def explain_command(
     backend_index: Optional[int],
     command: str,
     verbose: int,
-    log_file: Optional[str] = None
+    log_file: Optional[str] = None,
 ) -> str:
     """Generate an explanation for a shell command.
-    
+
     Args:
         config: Configuration object.
         backend_index: Backend index to use.
         command: Shell command to explain.
         verbose: Verbosity mode.
         log_file: Optional path to log file.
-        
+
     Returns:
         str: Generated explanation.
-        
+
     Raises:
         Exception: If explanation generation fails.
     """
-    # Get backend manager
-    backend_manager = BackendManager(config)
-    
     # Get tools
     tools = get_tools(config=config)
-    
+
     # Build prompt
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_explanation_system_prompt(tools)
-    
-    # Get backend
-    backend = backend_manager.get_backend(backend_index)
-    
-    # Start spinner if not in verbose mode
-    spinner = None
-    if verbose == 0:
-        spinner = Spinner("Explaining")
-        spinner.start()
-    
-    try:
-        # Generate explanation
-        explanation = await backend.generate_response(command, system_prompt, verbose=verbose, strip_markdown=False, max_tokens=1000)
-        log(log_file, backend, system_prompt, command, explanation)
-        return explanation
-    finally:
-        if spinner: spinner.stop()
+
+    return await _run_generation(
+        config,
+        backend_index,
+        system_prompt,
+        command,
+        "Explaining",
+        verbose > 0,
+        log_file,
+        strip_markdown=False,
+        max_tokens=1000,
+    )
 
 
-def confirm_execution(command: str) -> Union[bool, str, tuple]:
+def confirm_execution(
+    command: str, danger_level: Optional[str] = None
+) -> tuple[ConfirmationResult, Optional[str]]:
     """Ask for confirmation before executing a command.
-    
+
     Args:
         command: Command to execute.
-        
+        danger_level: Optional model-reported danger level ("safe",
+            "caution", "destructive", or None). When "destructive", an
+            extra warning line is printed before the confirmation prompt.
+            For any other value (including None), nothing extra is printed.
+
     Returns:
-        Union[bool, str, tuple]: True if confirmed, False if declined, "regenerate" if regeneration requested,
-                               "explain" if explanation requested, "edit" if editing requested.
-                               For regeneration, returns tuple ("regenerate", note) where note can be None.
+        tuple[ConfirmationResult, Optional[str]]: The confirmation result, and an
+            optional regeneration note (only set when the result is REGENERATE).
     """
+    if danger_level == "destructive":
+        print("⚠️  The model flagged this command as potentially destructive.")
     print(f"Suggested: {command}")
     response = input("[Confirm] Run this command? (y/N/e/r/x) ").strip().lower()
-    
+
     if response in ["r", "regenerate"]:
         note = input("Note for regeneration (optional): ").strip()
-        return ("regenerate", note if note else None)
+        return ConfirmationResult.REGENERATE, (note if note else None)
     elif response in ["e", "edit"]:
-        return "edit"
+        return ConfirmationResult.EDIT, None
     elif response in ["x", "explain"]:
-        return "explain"
-    
-    return response in ["y", "yes"]
+        return ConfirmationResult.EXPLAIN, None
+
+    if response in ["y", "yes"]:
+        return ConfirmationResult.EXECUTE, None
+    return ConfirmationResult.DECLINE, None
 
 
 def confirm_fix(command: str, code: int) -> bool:
     """Ask for confirmation before fixing failed command.
-    
+
     Args:
         command: Command to fix.
-        
+
     Returns:
         bool: True if confirmed, False if declined.
     """
@@ -542,7 +802,7 @@ def handle_keyboard_interrupt(signum: int, frame: Any) -> None:
 
 def safe_write(stream: TextIO, text: str) -> None:
     """Safely write text to a stream, handling encoding errors.
-    
+
     Args:
         stream: Output stream (stdout/stderr).
         text: Text to write.
@@ -552,7 +812,7 @@ def safe_write(stream: TextIO, text: str) -> None:
         stream.flush()
     except UnicodeEncodeError:
         # Fall back to ascii with replacement characters
-        stream.write(text.encode(stream.encoding or 'ascii', 'replace').decode())
+        stream.write(text.encode(stream.encoding or "ascii", "replace").decode())
         stream.flush()
 
 
@@ -561,15 +821,16 @@ def execute_command(command: str) -> tuple[int, str]:
     output = ""
     process = None
 
+    # Temporarily restore default SIGINT behavior so that KeyboardInterrupt
+    # is raised normally here and handled by the except block below, instead
+    # of the top-level handler terminating the whole process.
+    previous_handler = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         shell = os.environ.get("SHELL", "/bin/sh")
-        
-        # Set up signal handler for Ctrl+C
-        signal.signal(signal.SIGINT, handle_keyboard_interrupt)
-        
+
         # Get system encoding
         system_encoding = locale.getpreferredencoding()
-        
+
         # Security Note: Using shell=True can be risky if the command is crafted maliciously.
         # User confirmation (confirm_execution) is the primary safeguard.
         process = subprocess.Popen(
@@ -580,46 +841,52 @@ def execute_command(command: str) -> tuple[int, str]:
             stderr=subprocess.PIPE,
             bufsize=0,  # Unbuffered
             encoding=system_encoding,
-            errors='replace'  # Replace invalid characters
+            errors="replace",  # Replace invalid characters
         )
-        
+
+        # Both are guaranteed non-None because stdout/stderr=subprocess.PIPE
+        # was passed above; bind them locally so this is explicit.
+        proc_stdout = process.stdout
+        proc_stderr = process.stderr
+        assert proc_stdout is not None and proc_stderr is not None
+
         # Use select for non-blocking I/O
-        stdout_fd = process.stdout.fileno()
-        stderr_fd = process.stderr.fileno()
-        
+        stdout_fd = proc_stdout.fileno()
+        stderr_fd = proc_stderr.fileno()
+
         readable_fds = [stdout_fd, stderr_fd]
         stdout_data, stderr_data = "", ""
-        
+
         while readable_fds:
             # Use select to wait for data to be available
             ready_to_read, _, _ = select.select(readable_fds, [], [], 0.1)
-            
+
             # Process has exited and no more data to read
             if not ready_to_read and process.poll() is not None:
                 break
-                
+
             for fd in ready_to_read:
                 if fd == stdout_fd:
-                    data = process.stdout.read(1024)
+                    data = proc_stdout.read(1024)
                     if not data:  # EOF
                         readable_fds.remove(stdout_fd)
                     else:
                         safe_write(sys.stdout, data)
                         stdout_data += data
                         output += data
-                        
+
                 elif fd == stderr_fd:
-                    data = process.stderr.read(1024)
+                    data = proc_stderr.read(1024)
                     if not data:  # EOF
                         readable_fds.remove(stderr_fd)
                     else:
                         safe_write(sys.stderr, data)
                         stderr_data += data
                         output += data
-        
+
         # Wait for process to complete and get exit code
         return process.wait(), output
-        
+
     except KeyboardInterrupt:
         if process:
             process.terminate()
@@ -628,36 +895,58 @@ def execute_command(command: str) -> tuple[int, str]:
             except subprocess.TimeoutExpired:
                 process.kill()
         print("\nCommand interrupted", file=sys.stderr)
-        return 130
+        return 130, output
     except Exception as e:
         print(f"Error executing command: {str(e)}", file=sys.stderr)
-        return 1
+        return 1, output
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
 
 
-def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, response: str):
+def log(
+    log_file: Optional[str],
+    backend: LLMBackend,
+    system_prompt: str,
+    prompt: str,
+    response: str,
+    tool_calls: Optional[list] = None,
+) -> None:
+    """Append a request/response entry to the log file, if configured.
+
+    Args:
+        log_file: Path to the log file, or falsy to skip logging.
+        backend: Backend that handled the request.
+        system_prompt: System prompt sent to the backend.
+        prompt: User prompt sent to the backend.
+        response: Raw model response (JSON or plain text).
+        tool_calls: Optional list of `{"name", "arguments", "result_chars"}`
+            summaries of local tool invocations made while generating this
+            response (see `CommandResult.tool_calls`). Only lengths of tool
+            results are logged, never their full content. Defaults to None
+            (omitted from the log entry), which is the case for all requests
+            that didn't use native model tool calling.
+    """
     if not log_file:
         return
-    
+
     log_entry = {
         "timestamp": datetime.datetime.now().isoformat(),
-        "backend": {
-            "name": backend.name,
-            "model": backend.model,
-            "url": backend.url
-        },
+        "backend": {"name": backend.name, "model": backend.model, "url": backend.url},
         "prompt": prompt,
         "system_context": system_prompt,
-        "response": response
+        "response": response,
     }
+    if tool_calls is not None:
+        log_entry["tool_calls"] = tool_calls
 
     try:
         # Create directory if it doesn't exist
         log_dir = os.path.dirname(log_file)
         if log_dir and not os.path.exists(log_dir):
             os.makedirs(log_dir)
-        
+
         # Append to log file
-        with open(log_file, 'a') as f:
+        with open(log_file, "a") as f:
             f.write(json.dumps(log_entry, indent=2) + "\n")
     except Exception as e:
         print(f"Error writing to log file: {str(e)}", file=sys.stderr)
@@ -665,10 +954,10 @@ def log(log_file: str, backend: LLMBackend, system_prompt: str, prompt: str, res
 
 def _handle_edit_command(command: str) -> tuple[str, bool]:
     """Handle editing a command.
-    
+
     Args:
         command: Command to edit.
-        
+
     Returns:
         tuple: (edited_command, should_continue)
     """
@@ -676,9 +965,11 @@ def _handle_edit_command(command: str) -> tuple[str, bool]:
 
     if edited_command is None:
         # Edit was cancelled, errored, or resulted in empty command.
-        print("Edit cancelled or failed. Returning to original command confirmation.", file=sys.stderr)
+        print(
+            "Edit cancelled or failed. Returning to original command confirmation.", file=sys.stderr
+        )
         return command, True
-    
+
     if edited_command == command:
         print("Command unchanged.", file=sys.stderr)
         return command, True
@@ -690,23 +981,25 @@ def _handle_edit_command(command: str) -> tuple[str, bool]:
 
 def _handle_explain_command(config: Config, args: argparse.Namespace, command: str) -> bool:
     """Handle explaining a command.
-    
+
     Args:
         config: Configuration object.
         args: Command-line arguments.
         command: Command to explain.
-        
+
     Returns:
         bool: Whether to continue with confirmation.
     """
     try:
-        explanation = asyncio.run(explain_command(
-            config,
-            args.backend,
-            command,
-            verbose=args.verbose,
-            log_file=args.log_file,
-        ))
+        explanation = asyncio.run(
+            explain_command(
+                config,
+                args.backend,
+                command,
+                verbose=args.verbose,
+                log_file=args.log_file,
+            )
+        )
         print("\nExplanation:")
         print("-" * 40)
         print(explanation)
@@ -719,59 +1012,63 @@ def _handle_explain_command(config: Config, args: argparse.Namespace, command: s
         return True
 
 
-def _process_command_confirmation(config: Config, args: argparse.Namespace, command: str, declined_commands: List[dict]) -> tuple[int, bool, dict]:
+def _process_command_confirmation(
+    config: Config,
+    args: argparse.Namespace,
+    command_result: CommandResult,
+    declined_commands: list[dict],
+) -> tuple[int, bool, FixInfo]:
     """Process command confirmation and execution.
-    
+
     Args:
         config: Configuration object.
         args: Command-line arguments.
-        command: Command to confirm and execute.
+        command_result: Generated command (with optional model-reported
+            danger level) to confirm and execute.
         declined_commands: List of declined commands with optional notes.
-        
+
     Returns:
         tuple: (exit_code, should_continue, fix_info)
     """
-    fix_info = {
-        "fix_command": False,
-        "failed_command": None,
-        "failed_command_exit_code": None,
-        "failed_command_output": None,
-        "regenerate": False,
-    }
-    
+    fix_info = FixInfo()
+    command = command_result.command
+    danger_level = command_result.danger_level
+
     while True:
         # Ask for confirmation
-        confirmation = confirm_execution(command)
-        
-        if isinstance(confirmation, tuple) and confirmation[0] == "regenerate":
+        result, note = confirm_execution(command, danger_level)
+
+        if result == ConfirmationResult.REGENERATE:
             # Regenerate the command with optional note
-            _, note = confirmation
             declined_commands.append({"command": command, "note": note})
-            fix_info["regenerate"] = True
+            fix_info.regenerate = True
             return -1, False, fix_info  # Continue outer loop
-        elif confirmation == "edit":
+        elif result == ConfirmationResult.EDIT:
             command, should_continue = _handle_edit_command(command)
+            # The edited command's danger level is no longer verified by the
+            # model, so don't keep showing the (possibly stale) warning.
+            danger_level = None
             if should_continue:
                 continue
-        elif confirmation == "explain":
+        elif result == ConfirmationResult.EXPLAIN:
             should_continue = _handle_explain_command(config, args, command)
             if should_continue:
                 continue
-        elif confirmation:
+        elif result == ConfirmationResult.EXECUTE:
             print(f"Executing: {command}")
             # Actually execute the command
             code, output = execute_command(command)
             if code == 0:
                 # Command execution finished successfully
                 return 0, True, fix_info
-            
+
             # Command execution failed, ask for fixing
             fix_command = confirm_fix(command, code)
             if fix_command:
-                fix_info["fix_command"] = True
-                fix_info["failed_command"] = command
-                fix_info["failed_command_output"] = output
-                fix_info["failed_command_exit_code"] = code
+                fix_info.fix_command = True
+                fix_info.failed_command = command
+                fix_info.failed_command_output = output
+                fix_info.failed_command_exit_code = code
                 return -1, False, fix_info  # Continue outer loop
 
             # Fixing declined, return error code
@@ -783,11 +1080,11 @@ def _process_command_confirmation(config: Config, args: argparse.Namespace, comm
 
 def _get_prompt(args: argparse.Namespace, config: Config) -> str:
     """Get prompt from file or command line.
-    
+
     Args:
         args: Command-line arguments.
         config: Configuration object.
-        
+
     Returns:
         str: Prompt.
     """
@@ -801,35 +1098,39 @@ def _get_prompt(args: argparse.Namespace, config: Config) -> str:
 
 def main() -> int:
     """Main entry point.
-    
+
     Returns:
         int: Exit code.
     """
     # Set up signal handler for Ctrl+C
     signal.signal(signal.SIGINT, handle_keyboard_interrupt)
-    
+
     try:
         # Parse arguments
         args = parse_args(sys.argv[1:])
-        
+
         # Handle --init flag
         if args.init:
             Config.create_default_config()
             return 0
-        
+
         # Show version and exit
         if args.version:
             from nlsh import __version__
+
             print(f"nlsh version {__version__}")
             return 0
-        
+
         # Load configuration
         config = Config(args.config)
-        
+
         # Notify if no config file was found
         if not config.config_file_found:
             print("Note: No configuration file found at default locations.", file=sys.stderr)
-            print("Using default configuration. Run 'nlsh --init' to create a config file.", file=sys.stderr)
+            print(
+                "Using default configuration. Run 'nlsh --init' to create a config file.",
+                file=sys.stderr,
+            )
             print()
 
         # Validate mutually exclusive flags
@@ -839,46 +1140,51 @@ def main() -> int:
 
         # Check for STDIN input first
         stdin_input = _check_stdin_input()
-        
+
         if stdin_input:
             # STDIN processing mode
             if args.print or args.explain:
-                print("Error: --print and --explain flags cannot be used with STDIN input", file=sys.stderr)
+                print(
+                    "Error: --print and --explain flags cannot be used with STDIN input",
+                    file=sys.stderr,
+                )
                 return 1
-            
+
             if not args.prompt and not args.prompt_file:
                 print("Error: No prompt provided for STDIN processing")
                 return 1
-            
+
             # Get prompt from file or command line
             prompt = _get_prompt(args, config)
-            
+
             # Unpack stdin data and mime type
             stdin_data, mime_type = stdin_input
-            
+
             try:
                 # Process STDIN input
-                result = asyncio.run(process_stdin_input(
-                    config,
-                    args.backend,
-                    stdin_data,
-                    mime_type,
-                    prompt,
-                    verbose=args.verbose > 0,
-                    log_file=args.log_file,
-                    max_tokens_override=args.max_tokens,
-                ))
-                
+                result = asyncio.run(
+                    process_stdin_input(
+                        config,
+                        args.backend,
+                        stdin_data,
+                        mime_type,
+                        prompt,
+                        verbose=args.verbose > 0,
+                        log_file=args.log_file,
+                        max_tokens_override=args.max_tokens,
+                    )
+                )
+
                 # Output result to STDOUT
                 print(result)
                 return 0
-                
+
             except Exception as e:
                 print(f"Error processing STDIN input: {str(e)}", file=sys.stderr)
                 if args.verbose > 1:
                     traceback.print_exc(file=sys.stderr)
                 return 1
-        
+
         # Normal command generation mode
         # Check if we have a prompt
         if not args.prompt and not args.prompt_file:
@@ -887,17 +1193,19 @@ def main() -> int:
 
         # Get prompt from file or command line
         prompt = _get_prompt(args, config)
-        
+
         # Handle explain mode
         if args.explain:
             try:
-                explanation = asyncio.run(explain_command(
-                    config,
-                    args.backend,
-                    prompt,
-                    verbose=args.verbose,
-                    log_file=args.log_file,
-                ))
+                explanation = asyncio.run(
+                    explain_command(
+                        config,
+                        args.backend,
+                        prompt,
+                        verbose=args.verbose,
+                        log_file=args.log_file,
+                    )
+                )
                 print(explanation)
                 return 0
             except Exception as e:
@@ -905,18 +1213,22 @@ def main() -> int:
                 if args.verbose > 1:
                     traceback.print_exc(file=sys.stderr)
                 return 1
-        
+
         # Handle print mode
         if args.print:
             try:
-                command = asyncio.run(generate_command(
-                    config,
-                    args.backend,
-                    prompt,
-                    verbose=args.verbose > 0,
-                    log_file=args.log_file,
-                ))
-                print(command)
+                command_result = asyncio.run(
+                    generate_command(
+                        config,
+                        args.backend,
+                        prompt,
+                        verbose=args.verbose > 0,
+                        log_file=args.log_file,
+                    )
+                )
+                # Output contract of -p is a bare command, regardless of
+                # whether structured output was used internally.
+                print(command_result.command)
                 return 0
             except Exception as e:
                 print(f"Error generating command: {str(e)}", file=sys.stderr)
@@ -925,74 +1237,84 @@ def main() -> int:
                 return 1
 
         # Command generation and execution loop
-        fix_info = {
-            "fix_command": False,
-            "failed_command": None,
-            "failed_command_exit_code": None,
-            "failed_command_output": None,
-            "regenerate": False,
-        }
-        declined_commands = []
-        
+        fix_info = FixInfo()
+        # Entries are {"command": str, "note": Optional[str]} (see
+        # _process_command_confirmation), not bare command strings.
+        declined_commands: list[dict] = []
+
         while True:
             try:
                 # Generate, fix, or regenerate command
-                if fix_info["fix_command"]:
-                    command = asyncio.run(generate_command_fix(
-                        config,
-                        args.backend,
-                        prompt,
-                        fix_info["failed_command"],
-                        fix_info["failed_command_exit_code"],
-                        fix_info["failed_command_output"],
-                        verbose=args.verbose > 0,
-                        log_file=args.log_file,
-                    ))
-                elif fix_info["regenerate"] or declined_commands:
+                if fix_info.fix_command:
+                    # When fix_command is set, the failed-command details were
+                    # populated together with it (see _handle_command_failure).
+                    assert fix_info.failed_command is not None
+                    assert fix_info.failed_command_exit_code is not None
+                    assert fix_info.failed_command_output is not None
+                    command_result = asyncio.run(
+                        generate_command_fix(
+                            config,
+                            args.backend,
+                            prompt,
+                            fix_info.failed_command,
+                            fix_info.failed_command_exit_code,
+                            fix_info.failed_command_output,
+                            verbose=args.verbose > 0,
+                            log_file=args.log_file,
+                        )
+                    )
+                elif fix_info.regenerate or declined_commands:
                     # Use regeneration logic if we have declined commands or explicit regeneration request
-                    command = asyncio.run(generate_command_regeneration(
-                        config,
-                        args.backend,
-                        prompt,
-                        declined_commands,
-                        verbose=args.verbose > 0,
-                        log_file=args.log_file,
-                    ))
+                    command_result = asyncio.run(
+                        generate_command_regeneration(
+                            config,
+                            args.backend,
+                            prompt,
+                            declined_commands,
+                            verbose=args.verbose > 0,
+                            log_file=args.log_file,
+                        )
+                    )
                 else:
                     # Initial command generation
-                    command = asyncio.run(generate_command(
-                        config,
-                        args.backend,
-                        prompt,
-                        verbose=args.verbose > 0,
-                        log_file=args.log_file,
-                    ))
-                
+                    command_result = asyncio.run(
+                        generate_command(
+                            config,
+                            args.backend,
+                            prompt,
+                            verbose=args.verbose > 0,
+                            log_file=args.log_file,
+                        )
+                    )
+
                 # Process command confirmation and execution
                 exit_code, should_exit, fix_info = _process_command_confirmation(
-                    config, args, command, declined_commands
+                    config, args, command_result, declined_commands
                 )
-                
+
                 if should_exit:
                     return exit_code
-                
+
                 # Reset regenerate flag after processing
-                if fix_info.get("regenerate"):
-                    fix_info["regenerate"] = False
+                if fix_info.regenerate:
+                    fix_info.regenerate = False
                 # Otherwise continue the loop
             except Exception as e:
                 print(f"Error during command generation or execution: {str(e)}", file=sys.stderr)
                 if args.verbose > 1:
                     traceback.print_exc(file=sys.stderr)
                 return 1
-                
+
     except ValueError as e:
         print(f"Error: {str(e)}", file=sys.stderr)
         if args.verbose > 1:  # Show stack trace in double verbose mode
             traceback.print_exc(file=sys.stderr)
         if "API key" in str(e) or "Authentication failed" in str(e):
             print("\nTroubleshooting tips:", file=sys.stderr)
-            print("1. Check that your API key is correctly set in the environment variable", file=sys.stderr)
+            print(
+                "1. Check that your API key is correctly set in the environment variable",
+                file=sys.stderr,
+            )
             print("2. Verify the API key is valid with your provider", file=sys.stderr)
             print("3. Check the backend URL is correct in your configuration", file=sys.stderr)
         return 1

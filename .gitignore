@@ -173,5 +173,8 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Mac OS
+.DS_Store
+
 # Project specific
 .nlsh/

@@ -1,6 +1,7 @@
 # Neural Shell (`nlsh`)
 
 [![PyPI Downloads](https://static.pepy.tech/badge/neural-shell)](https://pepy.tech/projects/neural-shell)
+[![CI](https://github.com/eqld/nlsh/actions/workflows/ci.yml/badge.svg)](https://github.com/eqld/nlsh/actions/workflows/ci.yml)
 [![Awesome](https://camo.githubusercontent.com/2727609d8bfde9ba1a95be1449eb878bfafa4d76789ba05661857e2c8ac70fa1/68747470733a2f2f63646e2e7261776769742e636f6d2f73696e647265736f726875732f617765736f6d652f643733303566333864323966656437386661383536353265336136336531353464643865383832392f6d656469612f62616467652e737667)](https://github.com/deepseek-ai/awesome-deepseek-integration?tab=readme-ov-file#others)
 
 **nlsh** (*Neural Shell*) is an AI-driven command-line assistant that generates shell commands and one-liners tailored to your system context.
@@ -10,13 +11,19 @@
 * 🔄 **Multi-Backend LLM Support**\
 Configure multiple OpenAI-compatible endpoints (e.g., local Ollama, DeepSeek API, Mistral API) and switch them using -0, -1, etc.
 * 🧠 **System-Aware Context**\
-Automatically gathers information about your environment to generate commands tailored to your system.
+Automatically gathers information about your environment (OS, architecture, date/time, shell, available CLI tools, current directory) to generate commands tailored to your system. Only a whitelisted set of environment variables is ever sent to the LLM.
 * 🐚 **Shell-Aware Generation**\
-Set your shell (bash/zsh/fish/powershell) via config/env to ensure syntax compatibility.
+Set your shell (bash/zsh/fish) via config/env to ensure syntax compatibility.
 * 🛡️ **Safety First**\
 Never executes commands automatically, works in interactive confirmation mode.
+* 🧩 **Structured Output**\
+Backends that support it return a JSON object with the command plus a danger level, so `nlsh` can print a ⚠️ warning before a potentially destructive command. Falls back automatically on backends without structured-output support.
+* 🔧 **On-Demand Context via Tool Calling**\
+Instead of stuffing everything into the prompt up front, the model can call local read-only functions (directory listings, whitelisted environment variables, `which`, `--help`/`man` output) only when it actually needs them.
 * ⚙️ **Configurable**\
 YAML configuration for backends and shell preferences.
+
+Requires Python 3.9 or newer.
 
 --------
 
@@ -66,9 +73,10 @@ cd nlsh
 
 2. Install the package
 ```bash
-# Option 1: Install in development mode with all dependencies
-pip install -r requirements.txt
-pip install -e .
+# Option 1: Editable install with development dependencies (tests, linters)
+pip install -e ".[dev]"
+# Equivalent, via the requirements file (it already includes `-e .`)
+pip install -r requirements-dev.txt
 
 # Option 2: Simple installation
 pip install .
@@ -83,8 +91,8 @@ Basic usage for generating shell commands:
 nlsh find all pdfs modified in the last 2 days and compress them
 # Example output:
 # Suggested: find . -name "*.pdf" -mtime -2 -exec tar czvf archive.tar.gz {} +
-# [Confirm] Run this command? (y/N/e/r/x) y 
-# Executing:
+# [Confirm] Run this command? (y/N/e/r/x) y
+# Executing: find . -name "*.pdf" -mtime -2 -exec tar czvf archive.tar.gz {} +
 # (command output appears here)
 
 # Edit the suggested command before running:
@@ -95,11 +103,22 @@ nlsh list all files in the current directory
 # (Opens your $EDITOR with 'ls -la')
 # (Edit the command, e.g., to 'ls -l')
 # (Save and close editor)
+#
 # Edited command: ls -l
 # [Confirm] Run this command? (y/N/e/r/x) y
 # Executing: ls -l
 # (command output appears here)
 ```
+
+At the confirmation prompt you can answer:
+
+| Answer | Meaning |
+| --- | --- |
+| `y` / `yes` | Execute the command |
+| anything else (or empty) | Decline — prints `Command execution cancelled` |
+| `e` / `edit` | Open the command in `$EDITOR` (falls back to `vim`), then confirm again |
+| `r` / `regenerate` | Ask for a different command, optionally with a note |
+| `x` / `explain` | Explain the command, then return to the confirmation prompt |
 
 Generate and display commands without executing them using the `-p` or `--print` flag:
 ```bash
@@ -115,12 +134,29 @@ nlsh -v -2 count lines of code in all javascript files
 # Reasoning: To count lines of code in JavaScript files, I can use the 'find' command to locate all .js files,
 # then pipe the results to 'xargs wc -l' to count the lines in each file.
 # Suggested: find . -name "*.js" -type f | xargs wc -l
-# [Confirm] Run this command? (y/N/e/r/x) y 
-# Executing:
+# [Confirm] Run this command? (y/N/e/r/x) y
+# Executing: find . -name "*.js" -type f | xargs wc -l
 # (command output appears here)
 ```
 
-**Note on Command Execution:** `nlsh` executes commands using non-blocking I/O with the `select` module to read from stdout/stderr. This approach ensures compatibility with a wide range of commands, including those with pipes (`|`) and redirections. The non-blocking implementation prevents deadlocks that can occur with piped commands where one process might be waiting for input before producing output. While this works well for most commands, highly interactive commands (like those with progress bars or TUI applications) might not render perfectly.
+**Note on Command Execution:** `nlsh` executes confirmed commands with your `$SHELL` (falling back to `/bin/sh`) and reads their output using non-blocking I/O with the `select` module. This approach ensures compatibility with a wide range of commands, including those with pipes (`|`) and redirections, and prevents deadlocks that can occur with piped commands where one process might be waiting for input before producing output. While this works well for most commands, highly interactive commands (like those with progress bars or TUI applications) might not render perfectly. Pressing `Ctrl+C` while a command runs interrupts that command (exit code 130) instead of killing `nlsh` itself.
+
+**Note on flag combinations:** `-p/--print` and `-e/--explain` cannot be used together, and neither can be used when input is piped into `nlsh` (STDIN processing mode).
+
+### Destructive Command Warnings
+
+When the backend supports structured output (see [Structured Output](#structured-output)), the model also reports a danger level for the command it generates. If it flags the command as destructive, `nlsh` prints an extra warning line above the suggestion:
+
+```bash
+nlsh delete all log files older than 30 days
+# Example output:
+# ⚠️  The model flagged this command as potentially destructive.
+# Suggested: find . -name "*.log" -mtime +30 -delete
+# [Confirm] Run this command? (y/N/e/r/x) N
+# Command execution cancelled
+```
+
+The warning is advisory only — it is produced by the model, not by static analysis, so always review commands yourself. It is shown only for the `destructive` level, and it is not repeated after you edit the command with `e` (the edited command has not been assessed by the model).
 
 ### Command Explanation Mode
 
@@ -129,7 +165,7 @@ Get detailed explanations of shell commands using the `-e` or `--explain` flag:
 ```bash
 # Explain complex commands
 nlsh -e "find . -name '*.log' -mtime +30 -delete"
-# Provides detailed breakdown of the find command with safety warnings
+# Provides a plain-text breakdown: PURPOSE, WORKFLOW, BREAKDOWN, RISKS, IMPROVEMENTS
 
 # Use with verbose mode for reasoning
 nlsh -e -v "tar -czf backup.tar.gz /home/user/documents"
@@ -191,13 +227,14 @@ cat diagram.png | nlsh -1 explain this technical diagram step by step
 - JPEG (`.jpg`, `.jpeg`)
 - GIF (`.gif`)
 - WebP (`.webp`)
-- BMP (`.bmp`)
+
+BMP input is detected as an image but is not accepted by the API layer — convert it to one of the formats above first.
 
 **Image Processing Features:**
 - Automatic input type detection (text vs. image)
 - Configurable backend selection for vision processing
-- Support for base64-encoded images
-- Size validation (max 20MB by default)
+- Support for raw binary, base64 and `data:image/...;base64,` input
+- Size validation (per-backend `max_image_size_mb`, 20 MB by default)
 - Seamless integration with existing STDIN workflows
 
 **In STDIN processing mode:**
@@ -206,6 +243,7 @@ cat diagram.png | nlsh -1 explain this technical diagram step by step
 - The LLM processes the input content according to your instructions
 - Perfect for automation and scripting workflows
 - Automatic backend selection based on input type (text vs. image)
+- The piped content is treated strictly as data, not as instructions (see [Security](#security))
 
 ### Using `nlgc` for Commit Messages
 
@@ -218,17 +256,18 @@ git add .
 # Generate a commit message (using default backend)
 nlgc
 # Example output:
+# Reading content of 3 changed file(s)...
+#
 # Suggested commit message:
 # --------------------
-# feat: Add nlgc command for AI-generated commit messages
-# 
+# feat: add nlgc command for AI-generated commit messages
+#
 # Implements the nlgc command which analyzes staged git diffs
 # and uses an LLM to generate conventional commit messages.
 # Includes configuration options and CLI flags to control
 # whether full file content is included in the prompt.
 # --------------------
 # [Confirm] Use this message? (y/N/e/r) y
-# Executing: git commit -m "feat: Add nlgc command..."
 # Commit successful.
 
 # Generate using a specific backend and exclude full file content
@@ -242,15 +281,19 @@ nlgc -l French
 
 # Edit the suggested message before committing
 nlgc
-# [Confirm] Use this message? (y/N/e/r) e 
+# [Confirm] Use this message? (y/N/e/r) e
 # (Opens your $EDITOR with the message)
 # (Save and close editor)
+#
 # Using edited message:
+# --------------------
 # ...
+# --------------------
 # Commit with this message? (y/N) y
+# Commit successful.
 ```
 
-`nlgc` analyzes the diff of staged files and, optionally, their full content to generate a conventional commit message. You can confirm, edit (`e`), or regenerate (`r`) the message.
+`nlgc` analyzes the diff of staged files and, optionally, their full content to generate a conventional commit message. You can confirm (`y`), edit (`e`), or regenerate (`r`) the message. The commit itself is always performed as `git commit -m <message>`, so only staged changes are committed — `-a/--all` widens the *analysis* to all tracked modified files, it does not change which files get committed.
 
 ### Using `nlt` for Token Counting
 
@@ -279,7 +322,7 @@ cat input.txt | nlt -f additional.txt
 cat input.txt | nlt --encoding gpt2
 ```
 
-`nlt` uses `tiktoken` (the same tokenizer used by OpenAI models) to provide accurate token counts for both text and image inputs.
+`nlt` uses `tiktoken` (the same tokenizer used by OpenAI models) to provide accurate token counts for text, and estimates image tokens from the image dimensions. The default encoding is `cl100k_base`.
 
 --------
 
@@ -295,80 +338,82 @@ You have two options to create a configuration file:
    # or
    nlgc --init
    ```
-   This will prompt you to choose where to create the config file (if XDG_CONFIG_HOME is set) and create a default configuration file with placeholders for API keys.
+   This will prompt you to choose where to create the config file (if `XDG_CONFIG_HOME` is set) and create a default configuration file with placeholders for API keys.
 
 2. **Manual creation**:
-   Create `~/.nlsh/config.yml` manually:
+   Create `~/.nlsh/config.yml` manually. Configuration files are looked up in this order: the path given to `--config`, then `~/.nlsh/config.yml`, then `~/.config/nlsh/config.yml`.
+
+A complete, self-documenting reference config ships with the repository at [`examples/config.yml`](examples/config.yml). A shorter annotated example:
 
 ```yaml
-shell: "zsh"  # Override with env $NLSH_SHELL
+# Shell used for generated commands. Default: bash.
+# Allowed: bash, zsh, fish. Override with env $NLSH_SHELL.
+shell: "zsh"
+
 backends:
-  # Text-only backend
-  - name: "local-ollama"
-    url: "http://localhost:11434/v1"
-    api_key: "ollama"
-    model: "llama3"
-    supports_vision: false  # This model doesn't support image processing
-  
-  # Vision-capable backend
+  # Backend 0 — selected with `nlsh -0`
+  - name: "openai"                    # Required. Also enables the <NAME>_API_KEY env var.
+    url: "https://api.openai.com/v1"  # Required. OpenAI-compatible base URL.
+    model: "gpt-4o-mini"              # Required.
+    api_key: $OPENAI_API_KEY          # A "$VAR" value is read from that env var.
+    timeout: 120.0                    # Request timeout, seconds. Default: 120.0
+                                      # (300.0 for localhost/127.0.0.1/::1/unix:// URLs).
+    is_reasoning_model: false          # Default: false. Streams reasoning tokens with -v.
+    supports_vision: false             # Default: false. Required for image STDIN input.
+    max_image_size_mb: 20.0            # Default: 20.0. Used when supports_vision is true.
+    structured_output: auto            # auto (default) | json_schema | json_object | off
+    tool_calling: auto                 # auto (default) | on | off
+
+  # Backend 1 — vision-capable, used for image input from STDIN
   - name: "openai-gpt4-vision"
     url: "https://api.openai.com/v1"
+    model: "gpt-4o"
     api_key: $OPENAI_API_KEY
-    model: "gpt-4-vision-preview"
-    supports_vision: true   # This model supports image processing
-    max_image_size_mb: 20.0 # Maximum image size in MB for this backend
-  
-  - name: "groq-cloud"
-    url: "https://api.groq.com/v1"
-    api_key: $GROQ_KEY
-    model: "llama3-70b-8192"
-  
+    supports_vision: true
+    max_image_size_mb: 20.0
+
+  # Backend 2 — local Ollama (no real API key needed)
+  - name: "local-ollama"
+    url: "http://localhost:11434/v1"
+    model: "llama3"
+    api_key: "ollama"
+
+  # Backend 3 — reasoning model
   - name: "deepseek-reasoner"
     url: "https://api.deepseek.com/v1"
-    api_key: $DEEPSEEK_API_KEY
     model: "deepseek-reasoner"
-    is_reasoning_model: true  # Mark as a reasoning model for verbose mode
+    api_key: $DEEPSEEK_API_KEY
+    is_reasoning_model: true
 
+# Index in the backends list used when no -0..-9 flag is given. Default: 0.
+# Override with env $NLSH_DEFAULT_BACKEND.
 default_backend: 0
 
-# STDIN processing configuration
-# Override with environment variables: NLSH_STDIN_DEFAULT_BACKEND, NLSH_STDIN_DEFAULT_BACKEND_VISION, NLSH_STDIN_MAX_TOKENS
+# STDIN processing configuration (optional section).
 stdin:
-  # Default backend for text STDIN processing (optional)
-  # Falls back to global default_backend if not specified
-  default_backend: 0
-  
-  # Default backend for image STDIN processing (optional)
-  # Falls back to stdin.default_backend or global default_backend if not specified
-  # Should point to a backend with supports_vision: true
-  default_backend_vision: 1
-  
-  # Maximum output tokens for STDIN processing
-  # Can be overridden with --max-tokens command line flag
-  max_tokens: 2000
+  default_backend: 0          # Backend for text STDIN. Default: null (uses default_backend).
+  default_backend_vision: 1   # Backend for image STDIN. Default: null (uses stdin.default_backend,
+                              # then default_backend). Should have supports_vision: true.
+  max_tokens: 2000            # Max output tokens for STDIN mode. Default: 2000.
+                              # Overridden by --max-tokens.
 
-# Configuration for the 'nlgc' (Neural Git Commit) command
-# Override with environment variables: NLSH_NLGC_INCLUDE_FULL_FILES (true/false), NLSH_NLGC_LANGUAGE, NLSH_NLGC_DEFAULT_BACKEND
+# Configuration for the 'nlgc' (Neural Git Commit) command (optional section).
 nlgc:
-  # Whether to include the full content of changed files in the prompt
-  # sent to the LLM for commit message generation. Provides more context
-  # but increases token usage significantly. Can be overridden with
-  # --full-files or --no-full-files flags.
-  include_full_files: true
-  
-  # Language for commit message generation (e.g., "Spanish", "French", "German")
-  # Set to null or omit for default behavior (English)
-  # Can be overridden with --language/-l flag or NLSH_NLGC_LANGUAGE env var
-  language: null
-  
-  # Default backend for nlgc (optional)
-  # Falls back to global default_backend if not specified
-  # Can be overridden with NLSH_NLGC_DEFAULT_BACKEND env var
-  default_backend: null
+  include_full_files: true    # Send full content of changed files. Default: true.
+                              # Overridden by --full-files / --no-full-files.
+  language: null              # Commit message language, e.g. "Spanish". Default: null (English).
+                              # Overridden by --language/-l.
+  default_backend: null       # Backend for nlgc. Default: null (uses default_backend).
 ```
 
-*   The `is_reasoning_model` flag is used by `nlsh` to identify models that provide reasoning tokens in their responses. When this flag is set to `true` and verbose mode (`-v`) is enabled, the tool will display the model's reasoning process.
-*   The `nlgc.include_full_files` setting controls whether `nlgc` sends the full content of changed files to the LLM by default. This provides more context but uses more tokens. Use the `--full-files` or `--no-full-files` flags with `nlgc` to override this setting for a single run. If the context becomes too large for the model, `nlgc` will suggest using `--no-full-files`. Note that `nlgc` currently truncates individual files larger than ~100KB before adding them to the prompt to help prevent context overflows.
+Notes on individual keys:
+
+*   `name`, `url` and `model` are the only required fields of a backend; everything else has a default.
+*   `api_key` may be a literal value or a `$VAR` reference resolved from the environment. Local endpoints (`localhost`, `127.0.0.1`, `::1`, `unix://`) work without a real key; `"ollama"` and any value starting with `dummy` are accepted as placeholders.
+*   `timeout` must be a positive number; `max_image_size_mb` must be positive; `stdin.max_tokens` must be a positive integer; `nlgc.default_backend` must be a non-negative integer or `null`.
+*   `is_reasoning_model` lets `nlsh` display the model's reasoning tokens in verbose mode (`-v`). It is enabled automatically when the backend name contains "reason".
+*   `structured_output` and `tool_calling` apply to command generation, regeneration and fixing only — they have no effect on explanations, STDIN processing or `nlgc`. See [Structured Output](#structured-output) and [On-Demand Tools](#on-demand-tools).
+*   `nlgc.include_full_files` provides more context but uses more tokens. If the context becomes too large for the model, `nlgc` will suggest using `--no-full-files`. Individual files larger than ~100KB are truncated before being added to the prompt.
 
 ### Running Without a Configuration File
 
@@ -392,11 +437,13 @@ You can override configuration settings using environment variables:
 *   `NLSH_STDIN_DEFAULT_BACKEND`: Overrides `stdin.default_backend` for text STDIN processing (e.g., `export NLSH_STDIN_DEFAULT_BACKEND=0`).
 *   `NLSH_STDIN_DEFAULT_BACKEND_VISION`: Overrides `stdin.default_backend_vision` for image STDIN processing (e.g., `export NLSH_STDIN_DEFAULT_BACKEND_VISION=1`).
 *   `NLSH_STDIN_MAX_TOKENS`: Overrides `stdin.max_tokens` for STDIN processing output token limit (e.g., `export NLSH_STDIN_MAX_TOKENS=3000`).
-*   `NLSH_NLGC_INCLUDE_FULL_FILES`: Overrides `nlgc.include_full_files` (`true` or `false`).
+*   `NLSH_NLGC_INCLUDE_FULL_FILES`: Overrides `nlgc.include_full_files` (`true`/`1`/`yes` or `false`/`0`/`no`).
 *   `NLSH_NLGC_LANGUAGE`: Overrides `nlgc.language` (e.g., `export NLSH_NLGC_LANGUAGE=Spanish`).
 *   `NLSH_NLGC_DEFAULT_BACKEND`: Overrides `nlgc.default_backend` for nlgc backend selection (e.g., `export NLSH_NLGC_DEFAULT_BACKEND=2`).
-*   `[BACKEND_NAME]_API_KEY`: Sets the API key for a named backend (e.g., `export OPENAI_API_KEY=sk-...`). This takes precedence over `$VAR` references in the config file.
 *   `NLSH_BACKEND_[INDEX]_API_KEY`: Sets the API key for a backend by its index (e.g., `export NLSH_BACKEND_0_API_KEY=sk-...`).
+*   `[BACKEND_NAME]_API_KEY`: Sets the API key for a named backend (e.g., `export OPENAI_API_KEY=sk-...` for a backend named `openai`). This takes precedence over both `NLSH_BACKEND_[INDEX]_API_KEY` and `$VAR` references in the config file.
+
+Values that cannot be parsed as integers (for the backend index and token limit overrides) are ignored, leaving the configured value in place.
 
 --------
 
@@ -411,20 +458,20 @@ nlsh find all log files larger than 10MB
 # Example output:
 # Suggested: find . -name "*.log" -size +10M
 # [Confirm] Run this command? (y/N/e/r/x) x
-# 
+#
 # Explanation:
 # ----------------------------------------
-# This command searches for log files larger than 10MB in the current directory and its subdirectories.
-# 
-# Breaking it down:
-# - `find .` - Starts the find command to search from the current directory (.)
-# - `-name "*.log"` - Looks for files with names ending in .log
-# - `-size +10M` - Filters for files larger than 10MB
-# 
-# The command will recursively search through all subdirectories and display the paths of matching files.
+# PURPOSE: Find log files larger than 10MB below the current directory.
+#
+# BREAKDOWN:
+# - `find .`: start searching from the current directory
+# - `-name "*.log"`: match files whose names end in .log
+# - `-size +10M`: keep only files larger than 10MB
+#
+# RISKS: No significant risks. The command only reads the filesystem.
 # ----------------------------------------
 # [Confirm] Run this command? (y/N/e/r/x) y
-# Executing:
+# Executing: find . -name "*.log" -size +10M
 # (command output appears here)
 ```
 
@@ -440,9 +487,9 @@ nlsh find large files
 # Suggested: find . -type f -size +100M
 # [Confirm] Run this command? (y/N/e/r/x) r
 # Note for regeneration (optional): Use 'du' instead
-# Regenerating command...
 # Suggested: du -h -d 1 | sort -hr
 # [Confirm] Run this command? (y/N/e/r/x) y
+# Executing: du -h -d 1 | sort -hr
 # (command output appears here)
 ```
 
@@ -452,7 +499,7 @@ When you choose to regenerate a command, you can optionally provide a note expla
 - The system uses a special regeneration prompt that includes your original request
 - All previously rejected commands are listed with their rejection reasons (if provided)
 - The AI receives specific guidance about what didn't work and what you're looking for
-- Empty notes work exactly like the previous system - just press Enter to skip
+- Notes are optional — just press Enter to skip
 
 To encourage more diverse suggestions with each regeneration attempt, the temperature parameter (which controls randomness) is automatically increased by 0.1 for each regeneration, starting from 0.2 and capping at 1.0. This applies to both `nlsh` command generation and `nlgc` commit message generation.
 
@@ -465,19 +512,18 @@ nlsh find files modified today
 # Example output:
 # Suggested: find . -mtime 0
 # [Confirm] Run this command? (y/N/e/r/x) y
-# Executing:
+# Executing: find . -mtime 0
 # find: unknown option -- m
 # find: `find .mtime' is not a valid expression
-# 
+#
 # ----------------
 # Command execution failed with code 1
 # Failed command: find . -mtime 0
 # Try to fix? If you confirm, the command output and exit code will be sent to LLM.
 # [Confirm] Try to fix this command? (y/N) y
-# Fixing...
 # Suggested: find . -type f -mtime 0
 # [Confirm] Run this command? (y/N/e/r/x) y
-# Executing:
+# Executing: find . -type f -mtime 0
 # (command output appears here)
 ```
 
@@ -488,19 +534,78 @@ This feature helps you quickly recover from command errors by:
 
 The LLM receives the original prompt, the failed command, its exit code, and output, allowing it to understand what went wrong and how to fix it. This is especially useful for syntax errors, missing flags, or incorrect parameter formats.
 
+### Structured Output
+
+For command generation, regeneration and fixing, `nlsh` asks the model for a JSON object instead of a bare command:
+
+```json
+{"command": "find . -name '*.log' -mtime +30 -delete", "danger_level": "destructive"}
+```
+
+The `danger_level` is one of `safe` (read-only), `caution` (modifies files/state reversibly) or `destructive` (may delete/overwrite data or affect the system irreversibly). A `destructive` level triggers the ⚠️ warning described in [Destructive Command Warnings](#destructive-command-warnings). The command itself is always shown and always requires confirmation, regardless of the reported level.
+
+The per-backend `structured_output` key controls how this is requested:
+
+| Value | Behavior |
+| --- | --- |
+| `auto` (default) | Try `json_schema` first, then `json_object`, then plain text. The first mode that works is remembered for the rest of the run. |
+| `json_schema` | Always request strict, schema-validated JSON. If the backend rejects it, fall back to plain text. |
+| `json_object` | Always request a plain JSON object (the schema is described in the prompt rather than enforced by the API). |
+| `off` | Never request structured output; use the plain-text path. |
+
+Set `structured_output: off` when a backend or proxy mangles or rejects the `response_format` parameter, or when you simply don't want the danger-level annotation. Responses that come back as invalid JSON are transparently treated as plain-text commands, so a misbehaving backend degrades gracefully instead of failing.
+
+Structured output is used only for command generation, regeneration and fixing. Explanations, STDIN processing and `nlgc` always use plain text, and verbose runs (`-v`/`-vv`) use the classic streaming path so reasoning tokens stay visible.
+
+### On-Demand Tools
+
+Instead of packing every piece of context into the prompt up front, backends that support OpenAI-style function calling can let the model request context only when it needs it. When tool calling is active, the up-front context is reduced to the cheap tools (`SystemInfo` and `ToolAvailability`) and the model may call these local functions:
+
+| Tool | What it does |
+| --- | --- |
+| `list_directory` | Lists entries (name, type, size) of a directory. Skips hidden entries, never reads file contents. 1–200 entries, 50 by default. |
+| `read_env_var` | Reads a single **whitelisted** environment variable. Non-whitelisted names (e.g. secrets) are refused. `PATH` returns a capped preview. |
+| `which` | Resolves a binary name to its path on `PATH`. |
+| `help_snippet` | Runs `<binary> --help` (falling back to `-h`) and returns the output. |
+| `man_summary` | Runs `man <binary>` with pagers disabled and returns the output. |
+
+Safety properties of these tools:
+
+* **Read-only.** None of them modify files, environment or system state.
+* **No shell.** Subprocesses are invoked with an argument list, never through a shell, so the model cannot inject shell syntax.
+* **Validated arguments.** Environment variable and binary names must match strict patterns and, for env vars, the whitelist; invalid input returns an error string instead of executing anything.
+* **Capped.** Every result is truncated to 4000 characters, subprocesses time out after 3 seconds, and at most 5 tool-call rounds are performed per request before a final answer is forced.
+
+The per-backend `tool_calling` key controls this feature:
+
+| Value | Behavior |
+| --- | --- |
+| `auto` (default) | Offer tools; if the backend rejects the `tools` parameter, silently fall back to the regular path for the rest of the run. |
+| `on` | Always offer tools; if the backend rejects them, fail with an error suggesting `tool_calling: off`. |
+| `off` | Never offer tools; always send the full up-front context. |
+
+Notes:
+
+* Verbose mode (`-v`/`-vv`) always uses the classic path with the full up-front context — tool calling is skipped so reasoning-token streaming is preserved.
+* Tool calling applies to command generation, regeneration and fixing only (not explanations, STDIN processing or `nlgc`).
+* With `--log-file`, each logged entry includes a `tool_calls` summary listing the tool name, its arguments and the *length* of the result — never the result content itself.
+* The tool registry is transport-agnostic by design; MCP-backed tools are a possible future addition.
+
 ### System Context Tools
 
 `nlsh` uses a set of system tools to gather context information about your environment. This context is included in the prompt sent to the LLM, enabling it to generate more accurate and relevant shell commands tailored to your specific system.
 
 These tools include:
 
-* **DirLister**: Lists non-hidden files in the current directory with metadata (file type, size, modification time). This helps the LLM understand what files are available in your working directory.
+* **SystemInfo**: Operating system and release, Linux distribution or macOS version, architecture, Python version, the current date/time with timezone (useful for relative-date commands), and the configured shell with its version when it can be determined cheaply.
 
-* **EnvInspector**: Reports environment variables (with sensitive information redacted) to ensure compatibility with your system. This includes shell information, PATH entries, and other important environment variables that might affect command execution.
+* **ToolAvailability**: Which common CLI tools (e.g. `git`, `docker`, `jq`, `rg`, `systemctl`) are actually present on your `PATH`, so the model doesn't suggest commands you don't have installed.
 
-* **SystemInfo**: Provides OS, kernel, and architecture context. This includes information about your operating system, version, distribution (for Linux), architecture, and Python environment, helping the LLM generate commands that are compatible with your system.
+* **EnvInspector**: A small **whitelisted** subset of environment variables — `SHELL`, `TERM`, `LANG`, `LC_ALL`, `EDITOR`, `PAGER`, `HOME`, `PWD`, `TMPDIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `VIRTUAL_ENV`, `CONDA_DEFAULT_ENV` — plus a preview of the first 15 `PATH` entries. No other environment variables are read or sent.
 
-The context from these tools is automatically included in every prompt sent to the LLM, requiring no user configuration. This system-aware approach allows `nlsh` to generate commands that are more likely to work correctly on your specific system configuration.
+* **DirLister**: The current directory path and its non-hidden entries with type and size (directories first, then files, alphabetically), capped at 50 entries.
+
+The context from these tools is automatically included in the prompts sent to the LLM, requiring no user configuration. When tool calling is active, only `SystemInfo` and `ToolAvailability` are sent up front and the rest is fetched on demand (see [On-Demand Tools](#on-demand-tools)).
 
 ### Request Logging
 
@@ -510,7 +615,7 @@ You can log all requests to the LLM and its responses to a file:
 nlsh --log-file ~/.nlsh/logs/requests.log find all python files modified in the last week
 ```
 
-The log file will contain JSON entries with timestamps, backend information, prompts, system context, and responses.
+The log file will contain JSON entries with timestamps, backend information (name, model, URL), the prompt, the system context, and the raw response. Entries generated via tool calling also include a `tool_calls` summary (tool name, arguments, and result length only).
 
 ### Verbose Mode
 
@@ -525,6 +630,7 @@ nlsh -v find all python files modified in the last week
 # To filter by modification time, I'll use '-mtime -7' which means "modified less than 7 days ago".
 # Suggested: find . -name "*.py" -mtime -7
 # [Confirm] Run this command? (y/N/e/r/x) y
+# Executing: find . -name "*.py" -mtime -7
 # (command output appears here)
 
 # Show reasoning and debug info (double verbose)
@@ -534,7 +640,9 @@ nlsh -vv count lines in python files
 # (Plus stack traces and debug info in case of errors)
 ```
 
-Single verbose mode (-v) shows the model's reasoning process, while double verbose mode (-vv) additionally displays stack traces and debug information when errors occur. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer.
+Single verbose mode (`-v`) shows the model's reasoning process, while double verbose mode (`-vv`) additionally displays stack traces and debug information when errors occur. The reasoning tokens are displayed in real-time as they're generated, giving you insight into how the model arrived at its answer.
+
+Verbose runs use the classic streaming path: structured output and tool calling are skipped, and the full system context is sent up front. This means the ⚠️ destructive-command warning does not appear in verbose mode.
 
 ### Custom Prompts (`nlsh` only)
 
@@ -548,17 +656,40 @@ nlsh --prompt-file migration_task.txt
 
 *   `--full-files`: Forces `nlgc` to include the full content of changed files in the prompt, overriding the `nlgc.include_full_files` config setting.
 *   `--no-full-files`: Forces `nlgc` to exclude the full content of changed files from the prompt, overriding the config setting. Useful if you encounter context length errors.
-*   `-a`, `--all`: Makes `nlgc` consider all tracked, modified files, not just the ones staged for commit.
+*   `-a`, `--all`: Makes `nlgc` analyze all tracked, modified files, not just the ones staged for commit. The commit itself still includes only staged changes.
 *   `--language`, `-l`: Specifies the language for commit message generation (e.g., `--language Spanish`), overriding the `nlgc.language` config setting and `NLSH_NLGC_LANGUAGE` environment variable.
 
 --------
 
 ## Security
 
-* Command execution requires explicit user confirmation (`y/N/e/r/x` for `nlsh` or `y/N/e/r` for `nlgc`).
-* Commands are only displayed and never executed automatically.
-* All generated commands are shown to the user before any execution.
-* `nlsh` uses `subprocess.Popen` with `shell=True` to execute the generated commands. While necessary for interpreting complex shell syntax, this carries inherent risks if a user confirms a malicious command. The mandatory confirmation step is the primary safeguard against accidental execution of harmful commands. Always review suggested commands carefully.
+**Nothing runs without your confirmation**
+
+* Command execution always requires explicit confirmation (`y/N/e/r/x` for `nlsh`, `y/N/e/r` for `nlgc`).
+* Commands are only displayed, never executed automatically. You can inspect (`x`) or edit (`e`) any suggestion before running it.
+* `nlsh` executes confirmed commands with `subprocess.Popen(..., shell=True)`. This is necessary to interpret pipes, redirections and other shell syntax, but it means a malicious command would run with your privileges if you confirm it. The confirmation step is the primary safeguard — always review suggested commands carefully.
+
+**What gets sent to the LLM**
+
+* Only a whitelisted subset of environment variables is ever included in the context (see [System Context Tools](#system-context-tools)). Arbitrary environment variables — including API tokens and other secrets — are never collected or sent.
+* The same whitelist applies to the `read_env_var` tool, so the model cannot read secrets even when it asks for them by name.
+* Prompts instruct the model never to include secrets, API keys or passwords in generated commands.
+* Directory listings contain names, types and sizes only — file contents are never read for context.
+
+**Model-callable tools are read-only**
+
+* The local tools available to the model (`list_directory`, `read_env_var`, `which`, `help_snippet`, `man_summary`) cannot modify anything.
+* They validate their own arguments, never interpolate arguments into a shell string, invoke subprocesses only as argument lists (never with a shell), restrict subprocesses to short timeouts, and cap their output size.
+
+**Prompt-injection guardrails**
+
+* Content piped into `nlsh` is wrapped in explicit `INPUT_START`/`INPUT_END` markers, and the system prompt instructs the model to treat it strictly as data and ignore any instructions embedded in it.
+* The same "treat as data" rule is applied to commands passed to `-e/--explain` and to diffs and file contents processed by `nlgc`.
+* These are mitigations, not guarantees: a determined injection may still influence a suggestion, which is another reason every command requires confirmation.
+
+**Danger levels are advisory**
+
+* The `danger_level` reported with structured output — and the ⚠️ warning derived from it — comes from the model, not from static analysis. It can be wrong in both directions. Treat it as a hint and review commands yourself.
 
 --------
 
@@ -582,11 +713,10 @@ source .venv/bin/activate
 # On Windows:
 # .venv\Scripts\activate
 
-# Install development dependencies
-pip install -r requirements.txt
-
-# Install the package in development mode
-pip install -e .
+# Install the package in editable mode with development dependencies
+pip install -e ".[dev]"
+# Equivalent, via the requirements file (it already includes `-e .`)
+# pip install -r requirements-dev.txt
 ```
 
 ### Running the Development Version
@@ -600,14 +730,48 @@ python -m nlsh.main your prompt here
 # Or use the entry points directly
 nlsh your prompt here
 nlgc
+nlt -f somefile.txt
 ```
+
+### Tests, Linting and Type Checking
+
+```bash
+# Run the test suite
+pytest -q
+
+# Run a single test file, class or test
+pytest tests/test_config.py
+pytest tests/test_config.py::TestDefaults
+pytest tests/test_config.py::TestDefaults::test_missing_config_file
+
+# Coverage report
+pytest --cov=nlsh --cov-report=term-missing
+
+# Lint, format check and type check
+ruff check nlsh/
+black --check nlsh/
+mypy nlsh/
+```
+
+The tests mock all OpenAI API calls and all subprocess/shell executions, so they need no network access, no API keys, and never touch your real config (`~/.nlsh/config.yml`) or run real commands.
+
+A `Makefile` wraps the common tasks: `make install-dev`, `make test`, `make coverage`, `make lint`, `make format`, `make typecheck`, `make clean`.
+
+### Continuous Integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes to `main`/`master` and on every pull request:
+
+* **lint** job: `ruff check nlsh/`, `black --check nlsh/` and `mypy nlsh/` on Python 3.12, using the tool versions pinned in `requirements-dev.txt`.
+* **test** job: installs `requirements-dev.txt` and runs `pytest -q` on a matrix of Ubuntu and macOS × Python 3.9–3.14.
+
+Releases are published to PyPI by [`.github/workflows/python-publish.yml`](.github/workflows/python-publish.yml) when a GitHub release is created.
 
 ### Debugging
 
 For debugging, you can use your preferred IDE's debugging tools. For example, with VS Code:
 
 1. Set breakpoints in the code
-2. Create a launch configuration in `.vscode/launch.json`:
+2. Create a launch configuration in `.vscode/launch.json`. Use `"module": "nlsh.git_commit"` for `nlgc` or `"nlsh.token_count"` for `nlt`, passing flags in `args` instead of a prompt:
    ```json
    {
      "version": "0.2.0",
@@ -616,9 +780,11 @@ For debugging, you can use your preferred IDE's debugging tools. For example, wi
          "name": "Debug nlsh",
          "type": "debugpy",
          "request": "launch",
-         "module": "nlsh.main", # Or nlsh.git_commit for nlgc
-         "args": ["Your test prompt"], # Leave empty for nlgc or provide flags
-         "console": "integratedTerminal"
+         "module": "nlsh.main",
+         "args": ["Your test prompt"],
+         "console": "integratedTerminal",
+         "justMyCode": false,
+         "env": { "PYTHONPATH": "${workspaceFolder}" }
        }
      ]
    }
@@ -627,7 +793,9 @@ For debugging, you can use your preferred IDE's debugging tools. For example, wi
 
 ## Contributing
 
-PRs welcome! Please make sure to set up a development environment as described above, and ensure all tests pass before submitting a pull request.
+PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style and what's expected in a pull request. In short: set up a development environment as described above, and make sure `pytest -q` passes and the linters are clean before submitting.
+
+Notable changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 --------
 

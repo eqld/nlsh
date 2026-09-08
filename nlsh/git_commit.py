@@ -13,109 +13,110 @@ import signal
 import subprocess
 import sys
 import traceback
-from typing import List, Optional, Union, Dict
+from typing import Optional, Union
 
 import openai  # For catching potential API errors like context length
 
-from nlsh.config import Config, ConfigValidationError
 from nlsh.backends import BackendManager
-from nlsh.spinner import Spinner
 from nlsh.cli import handle_keyboard_interrupt, log
+from nlsh.config import Config, ConfigValidationError
 from nlsh.editor import edit_text_in_editor
 from nlsh.prompt import PromptBuilder
+from nlsh.spinner import Spinner
 
 
 # Custom Exceptions
 class NlgcError(Exception):
     """Base exception for nlgc errors."""
+
     pass
+
 
 class GitCommandError(NlgcError):
     """Error executing a git command."""
+
     pass
+
 
 class ContextLengthExceededError(NlgcError):
     """Error when prompt context exceeds the model's limit."""
+
     pass
+
 
 class EmptyCommitMessageError(NlgcError):
     """Error when the LLM returns an empty commit message."""
+
     pass
 
 
 FILE_CONTENT_HEADER = "Full content of changed files:"
-GIT_COMMIT_MESSAGE_MAX_TOKENS = 150
+GIT_COMMIT_MESSAGE_MAX_TOKENS = 300
 
 
-def parse_args(args: List[str]) -> argparse.Namespace:
+def parse_args(args: list[str]) -> argparse.Namespace:
     """Parse command-line arguments for nlgc."""
     parser = argparse.ArgumentParser(
         description="Neural Git Commit (nlgc) - AI commit message generator"
     )
-    
+
     # Backend selection arguments (similar to nlsh)
     for i in range(10):
         parser.add_argument(
-            f"-{i}",
-            dest="backend",
-            action="store_const",
-            const=i,
-            help=f"Use backend {i}"
+            f"-{i}", dest="backend", action="store_const", const=i, help=f"Use backend {i}"
         )
 
     # Verbose mode (similar to nlsh)
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="count",
         default=0,
-        help="Verbose mode (-v for reasoning tokens, -vv for debug info)"
+        help="Verbose mode (-v for reasoning tokens, -vv for debug info)",
     )
-    
+
     # Configuration file (similar to nlsh)
-    parser.add_argument(
-        "--config",
-        help="Path to configuration file"
-    )
-    
+    parser.add_argument("--config", help="Path to configuration file")
+
     # Initialize configuration
-    parser.add_argument(
-        "--init",
-        action="store_true",
-        help="Initialize a new configuration file"
-    )
-    
+    parser.add_argument("--init", action="store_true", help="Initialize a new configuration file")
+
     # Log file (similar to nlsh)
-    parser.add_argument(
-        "--log-file",
-        help="Path to file for logging LLM requests and responses"
-    )
+    parser.add_argument("--log-file", help="Path to file for logging LLM requests and responses")
 
     # Flags to control inclusion of full file content
     full_files_group = parser.add_mutually_exclusive_group()
     full_files_group.add_argument(
         "--full-files",
         action="store_true",
-        default=None, # Default is None to distinguish from explicitly setting False
-        help="Force inclusion of full file contents in the prompt (overrides config)."
+        default=None,  # Default is None to distinguish from explicitly setting False
+        help="Force inclusion of full file contents in the prompt (overrides config).",
     )
     full_files_group.add_argument(
         "--no-full-files",
         action="store_false",
-        dest="full_files", # Set dest to the same as --full-files
-        help="Force exclusion of full file contents from the prompt (overrides config)."
+        dest="full_files",  # Set dest to the same as --full-files
+        help="Force exclusion of full file contents from the prompt (overrides config).",
     )
 
-    # Optional arguments for git diff (e.g., --all for unstaged changes)
+    # Optional arguments for git diff (e.g., --all for unstaged changes).
+    # NOTE: this widens the *analysis* only. The commit is always performed as
+    # `git commit -m <message>`, so only staged changes are ever committed.
     parser.add_argument(
-        "--all", "-a",
+        "--all",
+        "-a",
         action="store_true",
-        help="Consider all tracked files, not just staged changes."
+        help=(
+            "Analyze all tracked modified files, not just staged changes. "
+            "Only staged changes are committed."
+        ),
     )
 
     # Language for commit message generation
     parser.add_argument(
-        "--language", "-l",
-        help="Language for commit message generation (e.g., 'Spanish', 'French', 'German')"
+        "--language",
+        "-l",
+        help="Language for commit message generation (e.g., 'Spanish', 'French', 'German')",
     )
 
     return parser.parse_args(args)
@@ -125,74 +126,90 @@ def _get_git_root() -> str:
     """Find the root directory of the git repository."""
     try:
         result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, check=True, encoding='utf-8'
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+            encoding="utf-8",
         )
         return result.stdout.strip()
     except FileNotFoundError:
-        raise GitCommandError("Git command not found. Make sure Git is installed and in your PATH.")
+        raise GitCommandError(  # noqa: B904
+            "Git command not found. Make sure Git is installed and in your PATH."
+        )
     except subprocess.CalledProcessError as e:
         # This error often means not in a git repository
-        raise GitCommandError("Failed to find git repository root. Are you in a git repository?") from e
+        raise GitCommandError(
+            "Failed to find git repository root. Are you in a git repository?"
+        ) from e
     except Exception as e:
         raise GitCommandError(f"Failed to get git root directory: {str(e)}") from e
 
 
 def get_git_diff(staged: bool = True) -> str:
     """Get the git diff.
-    
+
     Args:
         staged: If True, get diff for staged changes. Otherwise, get diff for all changes.
-        
+
     Returns:
         str: The git diff output.
-        
+
     Raises:
         RuntimeError: If git command fails or not in a git repository.
     """
-    command = ['git', 'diff']
+    command = ["git", "diff"]
     if staged:
-        command.append('--staged')
-        
+        command.append("--staged")
+
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=True, encoding="utf-8"
+        )
         if not result.stdout.strip():
-            raise RuntimeError("No changes detected." + (" Add files to staging area or use appropriate flags." if staged else ""))
+            raise RuntimeError(
+                "No changes detected."
+                + (" Add files to staging area or use appropriate flags." if staged else "")
+            )
         return result.stdout
     except FileNotFoundError:
-        raise GitCommandError("Git command not found. Make sure Git is installed and in your PATH.")
+        raise GitCommandError(  # noqa: B904
+            "Git command not found. Make sure Git is installed and in your PATH."
+        )
     except subprocess.CalledProcessError as e:
         error_message = f"Git diff command failed: {e.stderr}"
         if "not a git repository" in e.stderr.lower():
             error_message = "Not a git repository (or any of the parent directories)."
-        raise GitCommandError(error_message)
+        raise GitCommandError(error_message)  # noqa: B904
     except Exception as e:
-        raise GitCommandError(f"Failed to get git diff: {str(e)}")
+        raise GitCommandError(f"Failed to get git diff: {str(e)}")  # noqa: B904
 
 
-def get_changed_files(staged: bool = True) -> List[str]:
+def get_changed_files(staged: bool = True) -> list[str]:
     """Get the list of changed files relative to the git root.
 
     Args:
         staged: If True, get staged files. Otherwise, get all changed files.
-        
+
     Returns:
         List[str]: List of file paths relative to the git root.
-        
+
     Raises:
         RuntimeError: If git command fails.
     """
-    command = ['git', 'diff', '--name-only']
+    command = ["git", "diff", "--name-only"]
     if staged:
-        command.append('--staged')
-        
+        command.append("--staged")
+
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
-        return [line for line in result.stdout.strip().split('\n') if line]
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=True, encoding="utf-8"
+        )
+        return [line for line in result.stdout.strip().split("\n") if line]
     except subprocess.CalledProcessError as e:
-        raise GitCommandError(f"Git diff --name-only command failed: {e.stderr}")
+        raise GitCommandError(f"Git diff --name-only command failed: {e.stderr}")  # noqa: B904
     except Exception as e:
-        raise GitCommandError(f"Failed to get changed file list: {str(e)}")
+        raise GitCommandError(f"Failed to get changed file list: {str(e)}")  # noqa: B904
 
 
 def read_file_content(file_path: str, git_root: str) -> Optional[str]:
@@ -207,7 +224,7 @@ def read_file_content(file_path: str, git_root: str) -> Optional[str]:
     """
     absolute_path = os.path.join(git_root, file_path)
     try:
-        with open(absolute_path, 'r', encoding='utf-8', errors='replace') as f:
+        with open(absolute_path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except FileNotFoundError:
         # This might happen if the file was deleted but still shows in diff temporarily
@@ -222,7 +239,7 @@ def generate_commit_message(
     config: Config,
     backend_index: Optional[int],
     git_diff: str,
-    changed_files_content: Optional[Dict[str, str]], # Dict of {filepath: content}
+    changed_files_content: Optional[dict[str, str]],  # Dict of {filepath: content}
     verbose: bool = False,
     log_file: Optional[str] = None,
     language: Optional[str] = None,
@@ -237,7 +254,7 @@ def generate_commit_message(
     # Initialize backend and build prompts
     backend_manager = BackendManager(config)
     backend = backend_manager.get_backend(backend_index)
-    
+
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_git_commit_system_prompt(language)
     user_prompt = prompt_builder.build_git_commit_user_prompt(git_diff, changed_files_content)
@@ -250,13 +267,15 @@ def generate_commit_message(
 
     try:
         # Generate response
-        response_content = asyncio.run(backend.generate_response(
-            user_prompt, 
-            system_prompt, 
-            verbose=verbose, 
-            strip_markdown=True,
-            max_tokens=GIT_COMMIT_MESSAGE_MAX_TOKENS
-        ))
+        response_content = asyncio.run(
+            backend.generate_response(
+                user_prompt,
+                system_prompt,
+                verbose=verbose,
+                strip_markdown=True,
+                max_tokens=GIT_COMMIT_MESSAGE_MAX_TOKENS,
+            )
+        )
 
         log(log_file, backend, system_prompt, user_prompt, response_content)
 
@@ -268,14 +287,18 @@ def generate_commit_message(
     except openai.BadRequestError as e:
         # Handle context length errors specifically
         error_str = str(e).lower()
-        if "context_length_exceeded" in error_str or "too large" in error_str or "context length" in error_str:
+        if (
+            "context_length_exceeded" in error_str
+            or "too large" in error_str
+            or "context length" in error_str
+        ):
             error_msg = (
                 "Error: The diff and file contents combined are too large for the selected model's context window.\n"
                 "Try running again with the '--no-full-files' flag."
             )
             print(error_msg, file=sys.stderr)
             raise ContextLengthExceededError(error_msg) from e
-        
+
         # Re-raise other BadRequestErrors
         raise NlgcError(f"LLM API request failed: {str(e)}") from e
     except Exception as e:
@@ -293,8 +316,8 @@ def generate_commit_message_regeneration(
     config: Config,
     backend_index: Optional[int],
     git_diff: str,
-    changed_files_content: Optional[Dict[str, str]],
-    declined_messages: List[str],
+    changed_files_content: Optional[dict[str, str]],
+    declined_messages: list[str],
     verbose: bool = False,
     log_file: Optional[str] = None,
     language: Optional[str] = None,
@@ -310,7 +333,7 @@ def generate_commit_message_regeneration(
     backend_manager = BackendManager(config)
     backend = backend_manager.get_backend(backend_index)
     regeneration_count = len(declined_messages)
-    
+
     prompt_builder = PromptBuilder(config)
     system_prompt = prompt_builder.build_git_commit_regeneration_system_prompt(language)
     user_prompt = prompt_builder.build_git_commit_regeneration_user_prompt(
@@ -325,14 +348,16 @@ def generate_commit_message_regeneration(
 
     try:
         # Generate response
-        response_content = asyncio.run(backend.generate_response(
-            user_prompt, 
-            system_prompt, 
-            verbose=verbose, 
-            strip_markdown=True,
-            max_tokens=GIT_COMMIT_MESSAGE_MAX_TOKENS, 
-            regeneration_count=regeneration_count
-        ))
+        response_content = asyncio.run(
+            backend.generate_response(
+                user_prompt,
+                system_prompt,
+                verbose=verbose,
+                strip_markdown=True,
+                max_tokens=GIT_COMMIT_MESSAGE_MAX_TOKENS,
+                regeneration_count=regeneration_count,
+            )
+        )
 
         log(log_file, backend, system_prompt, user_prompt, response_content)
 
@@ -344,14 +369,18 @@ def generate_commit_message_regeneration(
     except openai.BadRequestError as e:
         # Handle context length errors specifically
         error_str = str(e).lower()
-        if "context_length_exceeded" in error_str or "too large" in error_str or "context length" in error_str:
+        if (
+            "context_length_exceeded" in error_str
+            or "too large" in error_str
+            or "context length" in error_str
+        ):
             error_msg = (
                 "Error: The diff and file contents combined are too large for the selected model's context window.\n"
                 "Try running again with the '--no-full-files' flag."
             )
             print(error_msg, file=sys.stderr)
             raise ContextLengthExceededError(error_msg) from e
-        
+
         # Re-raise other BadRequestErrors
         raise NlgcError(f"LLM API request failed: {str(e)}") from e
     except Exception as e:
@@ -372,12 +401,12 @@ def confirm_commit(message: str) -> Union[bool, str]:
     print(message)
     print("-" * 20)
     response = input("[Confirm] Use this message? (y/N/e/r) ").strip().lower()
-    
+
     if response in ["r", "regenerate"]:
         return "regenerate"
     if response in ["e", "edit"]:
         return "edit"
-    
+
     return response in ["y", "yes"]
 
 
@@ -385,12 +414,20 @@ def run_git_commit(message: str) -> int:
     """Run the git commit command."""
     try:
         # Using -m avoids needing an editor for simple cases
-        result = subprocess.run(['git', 'commit', '-m', message], check=True, encoding='utf-8')
-        result.check_returncode()
+        result = subprocess.run(
+            ["git", "commit", "-m", message],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if result.stdout:
+            print(result.stdout, end="")
         print("Commit successful.")
         return 0
     except subprocess.CalledProcessError as e:
-        print(f"Git commit failed:\n{e.stderr}", file=sys.stderr)
+        stderr = (e.stderr or "").strip()
+        print(f"Git commit failed:\n{stderr or f'exit code {e.returncode}'}", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"Error running git commit: {str(e)}", file=sys.stderr)
@@ -399,21 +436,21 @@ def run_git_commit(message: str) -> int:
 
 def _prepare_git_data(args, include_full_files):
     """Prepare git data for commit message generation.
-    
+
     Args:
         args: Command-line arguments.
         include_full_files: Whether to include full file contents.
-        
+
     Returns:
         tuple: (git_diff, changed_files_content)
-        
+
     Raises:
         GitCommandError: If a git command fails.
         RuntimeError: If there are no changes to commit.
     """
     git_root = _get_git_root()
     git_diff = get_git_diff(staged=not args.all)
-    
+
     changed_files_content = None
     if include_full_files:
         changed_files = get_changed_files(staged=not args.all)
@@ -425,16 +462,26 @@ def _prepare_git_data(args, include_full_files):
                 if content is not None:
                     MAX_FILE_SIZE = 100 * 1024
                     if len(content) > MAX_FILE_SIZE:
-                        print(f"Warning: File '{file_path}' is large ({len(content)} bytes), truncating for prompt.", file=sys.stderr)
+                        print(
+                            f"Warning: File '{file_path}' is large ({len(content)} bytes), truncating for prompt.",
+                            file=sys.stderr,
+                        )
                         content = content[:MAX_FILE_SIZE] + "\n... [TRUNCATED]"
                     changed_files_content[file_path] = content
-    
+
     return git_diff, changed_files_content
 
 
-def _generate_and_confirm_message(config, args, git_diff, changed_files_content, declined_messages=None, language=None):
+def _generate_and_confirm_message(
+    config: Config,
+    args: argparse.Namespace,
+    git_diff: str,
+    changed_files_content: Optional[dict[str, str]],
+    declined_messages: Optional[list[str]] = None,
+    language: Optional[str] = None,
+) -> tuple[bool, int]:
     """Generate and confirm a commit message.
-    
+
     Args:
         config: Configuration object.
         args: Command-line arguments.
@@ -442,16 +489,16 @@ def _generate_and_confirm_message(config, args, git_diff, changed_files_content,
         changed_files_content: Dict of file contents.
         declined_messages: List of previously declined messages.
         language: Language for commit message generation.
-        
+
     Returns:
         tuple: (success, exit_code)
-        
+
     Raises:
         Various exceptions from generate_commit_message.
     """
     if declined_messages is None:
         declined_messages = []
-    
+
     # Use regeneration function if we have declined messages, otherwise use initial generation
     if declined_messages:
         commit_message = generate_commit_message_regeneration(
@@ -491,7 +538,7 @@ def _generate_and_confirm_message(config, args, git_diff, changed_files_content,
         print("-" * 20)
         print(edited_message)
         print("-" * 20)
-        if input("Commit with this message? (y/N) ").strip().lower() == 'y':
+        if input("Commit with this message? (y/N) ").strip().lower() == "y":
             return True, run_git_commit(edited_message)
         else:
             print("Commit cancelled.")
@@ -517,13 +564,13 @@ def _main(config: Config, args: argparse.Namespace) -> int:
         language = args.language.strip()
     elif nlgc_config.get("language"):
         language = nlgc_config.get("language")
-    
+
     # Override backend selection if not explicitly set via CLI
     if args.backend is None:
         # Use nlgc-specific backend if configured
         nlgc_backend = config.get_nlgc_backend()
         args.backend = nlgc_backend
-    
+
     # Get git data
     try:
         git_diff, changed_files_content = _prepare_git_data(args, include_full_files)
@@ -532,7 +579,7 @@ def _main(config: Config, args: argparse.Namespace) -> int:
         return 1
 
     # Generate and confirm commit message
-    declined_messages = []
+    declined_messages: list[str] = []
     while True:
         try:
             done, exit_code = _generate_and_confirm_message(
@@ -552,56 +599,55 @@ def _main(config: Config, args: argparse.Namespace) -> int:
             return 1
 
 
-
 def main() -> None:
     """Synchronous wrapper function for the nlgc entry point."""
     signal.signal(signal.SIGINT, handle_keyboard_interrupt)
-    exit_code = 1 # Default exit code
+    exit_code = 1  # Default exit code
+    args: Optional[argparse.Namespace] = None
     try:
         # Parse args
         args = parse_args(sys.argv[1:])
-        
+
         # Handle --init flag
         if args.init:
             Config.create_default_config()
             sys.exit(0)
-        
+
         # Load config
         config = Config(args.config)
-        
+
         # Notify if no config file was found
         if not config.config_file_found:
             print("Note: No configuration file found at default locations.", file=sys.stderr)
-            print("Using default configuration. Run 'nlgc --init' to create a config file.", file=sys.stderr)
+            print(
+                "Using default configuration. Run 'nlgc --init' to create a config file.",
+                file=sys.stderr,
+            )
             print()
 
         exit_code = _main(config, args)
 
+    except SystemExit:
+        # Propagate explicit exits untouched: argparse uses 0 for --help and 2
+        # for a usage error, and the --init path above exits 0 on success. These
+        # must not be rewritten to the generic failure code below.
+        raise
     except (ConfigValidationError, GitCommandError, NlgcError, ValueError) as e:
         # Catch known errors that might occur during config loading or async execution
         print(f"Error: {str(e)}", file=sys.stderr)
-        if _get_verbose_level() > 1: traceback.print_exc(file=sys.stderr)
+        if args is not None and args.verbose > 1:
+            traceback.print_exc(file=sys.stderr)
         exit_code = 1
     except KeyboardInterrupt:
         print("\nOperation cancelled by user", file=sys.stderr)
         exit_code = 130
     except Exception as e:
         print(f"Fatal error: {str(e)}", file=sys.stderr)
-        if _get_verbose_level() > 1: traceback.print_exc(file=sys.stderr)
+        if args is not None and args.verbose > 1:
+            traceback.print_exc(file=sys.stderr)
         exit_code = 1
-    finally:
-        sys.exit(exit_code)
 
-
-def _get_verbose_level() -> int:
-    verbose_level = 0
-    for _, arg in enumerate(sys.argv):
-        if arg == '-v': verbose_level += 1
-        if arg == '--verbose': verbose_level += 1
-        if arg.startswith('-v') and not arg.startswith('--'):
-            verbose_level += len(arg) -1
-    
-    return verbose_level
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
